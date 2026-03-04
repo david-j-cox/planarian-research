@@ -1,0 +1,34 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Data & videos (too large for git)
+OpenDishWork/
+additional_videos/
+Videos.gdoc
+*.mkv
+*.mp4
+*.avi
+
+# Google Drive artifacts
+*.gdoc
+*.gsheet
+*.gslides
+
+# Output
+scripts_notebooks/runs/
+
+# OS
+.DS_Store
+
+# Large binaries / images
+*.xlsx
+*.pdf
+*.png
+*.gif
+*.jpg
+*.jpeg
+*.JPEG
+Early Setup/
