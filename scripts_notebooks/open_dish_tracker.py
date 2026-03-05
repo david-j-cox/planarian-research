@@ -1971,18 +1971,32 @@ def process_session(session_dir, calib, args, output_dir, seed=None):
                 # ── Overlay rendering ──────────────────────────────
                 if overlay_frame_buf is not None:
                     # Deferred midline overlay: buffer data for post-processing
-                    overlay_frame_buf.append({
-                        'frame_idx': frame_idx,
-                        'centroid': centroid,
-                        'contour': contour.copy() if contour is not None else None,
-                        'midline': midline.copy() if midline is not None else None,
-                        'curvature': curvature.copy() if curvature is not None else None,
-                        'body_length_px': body_length_px if centroid is not None else 0.0,
-                        'speed_mm_s': speed_mm_s,
-                        'confidence': confidence if centroid is not None else 0.0,
-                        'area': area if centroid is not None else 0,
-                        'time_s': t,
-                    })
+                    if centroid is not None:
+                        overlay_frame_buf.append({
+                            'frame_idx': frame_idx,
+                            'centroid': centroid,
+                            'contour': contour.copy() if contour is not None else None,
+                            'midline': midline.copy() if midline is not None else None,
+                            'curvature': curvature.copy() if curvature is not None else None,
+                            'body_length_px': body_length_px,
+                            'speed_mm_s': speed_mm_s,
+                            'confidence': confidence,
+                            'area': area,
+                            'time_s': t,
+                        })
+                    else:
+                        overlay_frame_buf.append({
+                            'frame_idx': frame_idx,
+                            'centroid': None,
+                            'contour': None,
+                            'midline': None,
+                            'curvature': None,
+                            'body_length_px': 0.0,
+                            'speed_mm_s': "",
+                            'confidence': 0.0,
+                            'area': 0,
+                            'time_s': t,
+                        })
                 elif overlay_writer is not None:
                     # ── Original overlay (no midline) ──
                     vis = bgr.copy()
