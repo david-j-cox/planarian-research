@@ -453,11 +453,19 @@ def _apply_anchors_to_csv(task: GapTask,
 WINDOW = "Gap Scrubber"
 
 
-def _run_one_gap(task: GapTask, vcache: VideoCache) -> str:
-    """Returns 'saved' | 'unrecoverable' | 'quit' | 'back'."""
+def _run_one_gap(task: GapTask, vcache: VideoCache
+                 ) -> tuple[str, list[dict], list[dict]]:
+    """Run the UI for one gap.
+
+    Returns (status, clicks, frames):
+      status:  'saved' | 'unrecoverable' | 'quit' | 'back'
+      clicks:  the list of human-placed anchors (empty when not 'saved')
+      frames:  the per-row metadata for every gap frame (so the caller
+               can apply interpolation without re-reading the CSV)
+    """
     frames = _build_frame_walk(task, task.csv_path)
     if not frames:
-        return "unrecoverable"
+        return "unrecoverable", [], []
 
     if task.mode == "anchor":
         # Anchor mode: two suggested offsets at 50% and 75% of the gap.
@@ -466,7 +474,7 @@ def _run_one_gap(task: GapTask, vcache: VideoCache) -> str:
     else:
         # Trace mode: aim for ~one click every TRACE_CLICK_INTERVAL_S.
         if task.duration_s <= 0:
-            return "unrecoverable"
+            return "unrecoverable", [], frames
         step = max(1, int(round(TRACE_CLICK_INTERVAL_S *
                                 (len(frames) / task.duration_s))))
         offsets = list(range(0, len(frames), step))
@@ -532,11 +540,11 @@ def _run_one_gap(task: GapTask, vcache: VideoCache) -> str:
         key = cv2.waitKey(33) & 0xFF
 
         if key == ord("q"):
-            return "quit"
+            return "quit", clicks, frames
         elif key == ord("b"):
-            return "back"
+            return "back", clicks, frames
         elif key == ord("k"):
-            return "unrecoverable"
+            return "unrecoverable", clicks, frames
         elif key == ord("u"):
             if clicks:
                 clicks.pop()
@@ -545,7 +553,7 @@ def _run_one_gap(task: GapTask, vcache: VideoCache) -> str:
             if not clicks:
                 status = "no clicks placed; press [k] to mark unrecoverable"
                 continue
-            return "saved"
+            return "saved", clicks, frames
         elif key == ord(",") or key == 81:  # left arrow alt
             cur_offset -= 1
         elif key == ord(".") or key == 83:
@@ -594,26 +602,42 @@ def main():
             t = tasks[i]
             print(f"\n[{i + 1}/{len(tasks)}] {t.session} gap#{t.gap_idx} "
                   f"({t.tier}, {t.duration_s:.1f}s)")
-            result = _run_one_gap(t, vcache)
-            if result == "quit":
+            status, clicks, frames = _run_one_gap(t, vcache)
+
+            if status == "quit":
                 print("Quitting (current gap not saved).")
                 break
-            if result == "back":
+            if status == "back":
                 i = max(0, i - 1)
                 continue
 
             anchors = _load_anchors(t.anchors_path)
-            if result == "saved":
-                clicks = []  # _run_one_gap doesn't return them; simpler to re-derive
-                # NB: refactor — pass clicks out. For now, simplest fix:
-                # restructure so _run_one_gap returns (status, clicks).
-                pass
-            anchors["gaps"][str(t.gap_idx)] = {
-                "status": result if result in ("unrecoverable",) else (
-                    "anchored" if t.mode == "anchor" else "traced"),
+            anchor_record = {
                 "mode": t.mode,
                 "duration_s": t.duration_s,
+                "tier": t.tier,
+                "clicks": clicks,
             }
+            if status == "saved":
+                # Rewrite the gap's rows in the CSV from the clicks.
+                try:
+                    _apply_anchors_to_csv(t, clicks, frames, mode=t.mode)
+                    anchor_record["status"] = (
+                        "anchored" if t.mode == "anchor" else "traced")
+                    print(f"  saved {len(clicks)} click(s) → "
+                          f"{t.n_frames} row(s) imputed as "
+                          f"{anchor_record['status']}.")
+                except Exception as e:
+                    print(f"  ERROR writing anchors to CSV: {e}")
+                    anchor_record["status"] = "error"
+                    anchor_record["error"] = str(e)[:200]
+            elif status == "unrecoverable":
+                anchor_record["status"] = "unrecoverable"
+                print(f"  marked unrecoverable.")
+            else:
+                anchor_record["status"] = status
+
+            anchors["gaps"][str(t.gap_idx)] = anchor_record
             _save_anchors(t.anchors_path, anchors)
             i += 1
     finally:
