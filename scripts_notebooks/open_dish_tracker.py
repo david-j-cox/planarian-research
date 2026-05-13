@@ -1655,6 +1655,130 @@ def manual_seed_worm(video_path, dish_center=None, dish_radius=None):
     return None, None
 
 
+# Gap-tier duration thresholds (seconds). See impute_gaps.py / gap_scrubber.py.
+GAP_TIER_SHORT_MAX_S = 1.0    # < this → auto-bridgeable with linear interp
+GAP_TIER_MEDIUM_MAX_S = 10.0  # ≥ short, < this → needs two-anchor human input
+                              # ≥ medium → full human trace
+
+
+def write_gaps_sidecar(csv_path, gaps_path):
+    """Scan a tracks.csv and write a *_gaps.json describing LOST runs.
+
+    A LOST run is a maximal run of consecutive rows with empty centroid_x_mm.
+    Each gap records the frames bracketing the gap (last_known / next_known)
+    in pixel and mm coordinates, the gap duration in seconds, and a tier
+    label (short | medium | long) chosen by the duration thresholds above.
+
+    The sidecar is what the imputer and the scrubber GUI consume; it lets
+    them work without re-parsing the whole CSV.
+    """
+    import json
+    import pandas as pd
+
+    # CSVs are written with two metadata rows (mm_per_px, dish geometry)
+    # before the column header — same skip used in session_analysis.py.
+    df = pd.read_csv(csv_path, skiprows=2)
+    for col in ("time_s", "centroid_x_mm", "centroid_y_mm",
+                "centroid_x_px", "centroid_y_px", "frame"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    is_lost = df["centroid_x_mm"].isna().to_numpy()
+
+    # Run-length encode LOST: collect (start_row, end_row) inclusive.
+    gaps = []
+    in_gap = False
+    gap_start_idx = 0
+    for i, lost in enumerate(is_lost):
+        if lost and not in_gap:
+            in_gap = True
+            gap_start_idx = i
+        elif not lost and in_gap:
+            in_gap = False
+            gaps.append((gap_start_idx, i - 1))
+    if in_gap:
+        gaps.append((gap_start_idx, len(is_lost) - 1))
+
+    def _row_snapshot(idx):
+        if idx is None or idx < 0 or idx >= len(df):
+            return {"row": None, "frame": None, "time_s": None,
+                    "x_px": None, "y_px": None,
+                    "x_mm": None, "y_mm": None}
+        r = df.iloc[idx]
+
+        def _v(name):
+            v = r.get(name)
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return None
+            return float(v)
+        return {
+            "row": int(idx),
+            "frame": int(_v("frame")) if _v("frame") is not None else None,
+            "time_s": _v("time_s"),
+            "x_px": _v("centroid_x_px"),
+            "y_px": _v("centroid_y_px"),
+            "x_mm": _v("centroid_x_mm"),
+            "y_mm": _v("centroid_y_mm"),
+        }
+
+    out = []
+    for start_i, end_i in gaps:
+        t_start = df["time_s"].iloc[start_i]
+        t_end = df["time_s"].iloc[end_i]
+        t_start = None if pd.isna(t_start) else float(t_start)
+        t_end = None if pd.isna(t_end) else float(t_end)
+        dur = (t_end - t_start) if (t_start is not None and t_end is not None) else None
+
+        if dur is None:
+            tier = "unknown"
+        elif dur < GAP_TIER_SHORT_MAX_S:
+            tier = "short"
+        elif dur < GAP_TIER_MEDIUM_MAX_S:
+            tier = "medium"
+        else:
+            tier = "long"
+
+        out.append({
+            "start_row": int(start_i),
+            "end_row": int(end_i),
+            "start_frame": int(df["frame"].iloc[start_i]) if not pd.isna(df["frame"].iloc[start_i]) else None,
+            "end_frame": int(df["frame"].iloc[end_i]) if not pd.isna(df["frame"].iloc[end_i]) else None,
+            "start_video": str(df["video_file"].iloc[start_i]),
+            "end_video": str(df["video_file"].iloc[end_i]),
+            "start_time_s": t_start,
+            "end_time_s": t_end,
+            "duration_s": dur,
+            "n_frames": int(end_i - start_i + 1),
+            "tier": tier,
+            "last_known": _row_snapshot(start_i - 1 if start_i > 0 else None),
+            "next_known": _row_snapshot(end_i + 1 if end_i + 1 < len(df) else None),
+        })
+
+    summary = {
+        "n_rows": int(len(df)),
+        "n_gaps": len(out),
+        "n_lost_rows": sum(g["n_frames"] for g in out),
+        "pct_lost": (sum(g["n_frames"] for g in out) / max(1, len(df))) * 100.0,
+        "tier_counts": {
+            "short": sum(1 for g in out if g["tier"] == "short"),
+            "medium": sum(1 for g in out if g["tier"] == "medium"),
+            "long": sum(1 for g in out if g["tier"] == "long"),
+        },
+        "thresholds_s": {
+            "short_max": GAP_TIER_SHORT_MAX_S,
+            "medium_max": GAP_TIER_MEDIUM_MAX_S,
+        },
+    }
+
+    with open(gaps_path, "w") as f:
+        json.dump({"summary": summary, "gaps": out}, f, indent=2)
+    print(f"  Gaps:     {gaps_path} "
+          f"(n={summary['n_gaps']}, lost={summary['pct_lost']:.1f}%, "
+          f"short/med/long={summary['tier_counts']['short']}/"
+          f"{summary['tier_counts']['medium']}/"
+          f"{summary['tier_counts']['long']})")
+
+
 def process_session(session_dir, calib, args, output_dir, seed=None):
     """Process all videos in a session, producing one consolidated CSV.
 
@@ -1702,7 +1826,8 @@ def process_session(session_dir, calib, args, output_dir, seed=None):
         "centroid_x_px", "centroid_y_px", "centroid_x_mm", "centroid_y_mm",
         "body_angle_deg", "head_angle_deg", "area_px",
         "speed_px_s", "speed_mm_s", "confidence",
-        "body_length_px", "body_length_mm"
+        "body_length_px", "body_length_mm",
+        "source",  # tracked | imputed_short | imputed_anchored | human_traced | (empty if LOST)
     ]
 
     # Chained state across videos
@@ -1943,6 +2068,7 @@ def process_session(session_dir, calib, args, output_dir, seed=None):
                         round(confidence, 4),
                         round(body_length_px, 2) if body_length_px > 0 else "",
                         round(body_length_px * mm_per_px, 4) if body_length_px > 0 else "",
+                        "tracked",
                     ])
 
                     last_centroid = centroid
@@ -1965,7 +2091,8 @@ def process_session(session_dir, calib, args, output_dir, seed=None):
                         "", "", "", "",
                         "", "", 0,
                         "", "", 0.0,
-                        "", ""
+                        "", "",
+                        "",  # source: empty = unresolved LOST frame
                     ])
 
                 # ── Overlay rendering ──────────────────────────────
@@ -2178,6 +2305,10 @@ def process_session(session_dir, calib, args, output_dir, seed=None):
         )
         print(f"  Midlines: {npz_path} ({n_ml} frames)")
 
+    # ── Write gaps sidecar ──
+    gaps_path = os.path.join(output_dir, f"{session_name}_gaps.json")
+    write_gaps_sidecar(csv_path, gaps_path)
+
     # ── Deferred overlay rendering (correct H/T labels) ──
     if args.extract_midline and overlay_videos_deferred:
         head_is_pt0 = not (ht_flip_votes[0] > ht_keep_votes[0])
@@ -2264,8 +2395,11 @@ Examples:
     ap.add_argument("--overlay_videos", type=int, default=2,
                     help="Number of videos per session to render overlays for "
                          "(first N). Default: 2.")
-    ap.add_argument("--extract_midline", action="store_true",
-                    help="Enable midline/skeleton extraction for body shape analysis.")
+    ap.add_argument("--extract_midline", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="Enable midline/skeleton extraction for body shape "
+                         "analysis (default: enabled). Disable with "
+                         "--no-extract_midline.")
     ap.add_argument("--midline_points", type=int, default=20,
                     help="Maximum midline sample points (default: 20).")
 
