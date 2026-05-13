@@ -30,8 +30,23 @@ import pandas as pd
 STOP_SPEED_THRESH = 0.1   # mm/s — below this counts as "stopped"
 STOP_DURATION_THRESH = 60  # seconds of sustained stop to count
 
-WORM_COLORS = {"Bubba": "#3874A8", "Champ": "#E8853A"}  # blue / orange
-ANALYZE_WORMS = set(WORM_COLORS.keys())  # only these names are analyzed
+# APA grayscale styling. Worms are distinguished by fill (solid black vs
+# hatched white) in bar plots, and linestyle (solid vs dashed) in line plots.
+# Sessions within a worm are a light-to-dark gray gradient.
+WORM_BAR = {
+    "Bubba": {"facecolor": "black",  "hatch": "",   "edgecolor": "black"},
+    "Champ": {"facecolor": "white",  "hatch": "///", "edgecolor": "black"},
+}
+WORM_LINE = {
+    "Bubba": {"linestyle": "-",  "color": "black"},
+    "Champ": {"linestyle": "--", "color": "black"},
+}
+ANALYZE_WORMS = set(WORM_BAR.keys())  # only these names are analyzed
+
+
+def _gray_gradient(n, low=0.75, high=0.0):
+    """Return n shades of gray from light (low) to dark (high). 0=black."""
+    return [str(g) for g in np.linspace(low, high, n)]
 
 # ---------------------------------------------------------------------------
 # 1. Load and parse all CSVs
@@ -149,8 +164,8 @@ def cumulative_distance_series(df):
 # ---------------------------------------------------------------------------
 # Plotting helpers
 # ---------------------------------------------------------------------------
-def _style_ax(ax, title, xlabel, ylabel):
-    ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
+def _style_ax(ax, xlabel, ylabel):
+    """APA-ish styling: no title, clean spines, no top/right borders."""
     ax.set_xlabel(xlabel, fontsize=12)
     ax.set_ylabel(ylabel, fontsize=12)
     ax.tick_params(labelsize=11)
@@ -228,7 +243,7 @@ def main():
     print("=" * 72 + "\n")
 
     # ======================================================================
-    # FIGURE 1 — Total distance per session (grouped bar)
+    # FIGURE 1 — Total distance per session (grouped bar, grayscale)
     # ======================================================================
     fig1, ax1 = plt.subplots(figsize=(8, 5))
     x = np.arange(len(session_nums))
@@ -237,31 +252,36 @@ def main():
     for i, w in enumerate(worms):
         vals = [dist_table.get((w, sn), 0) for sn in session_nums]
         ax1.bar(x + i * bar_w, vals, bar_w, label=w,
-                color=WORM_COLORS[w], edgecolor="white", linewidth=0.5)
+                facecolor=WORM_BAR[w]["facecolor"],
+                hatch=WORM_BAR[w]["hatch"],
+                edgecolor=WORM_BAR[w]["edgecolor"],
+                linewidth=1.0)
 
     ax1.set_xticks(x + bar_w / 2)
     ax1.set_xticklabels([str(s) for s in session_nums])
-    _style_ax(ax1, "Total Distance Traveled per Session",
-              "Session", "Total Distance (cm)")
+    _style_ax(ax1, "Session number", "Total distance traveled (cm)")
     ax1.legend(fontsize=11, frameon=False)
     fig1.tight_layout()
     fig1.savefig(f"{output_dir}/total_distance_per_session.png", dpi=200)
     print("Saved: total_distance_per_session.png")
 
     # ======================================================================
-    # FIGURE 2 — Cumulative distance over time (line plot)
+    # FIGURE 2 — Cumulative distance over time (line plot, grayscale)
     # ======================================================================
     fig2, axes2 = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
 
     for ax, w in zip(axes2, worms):
-        w_sessions = [s for s in sessions if s["worm"] == w]
-        cmap = plt.cm.viridis(np.linspace(0.15, 0.85, len(w_sessions)))
-        for s, c in zip(sorted(w_sessions, key=lambda s: s["session"]), cmap):
+        w_sessions = sorted([s for s in sessions if s["worm"] == w],
+                            key=lambda s: s["session"])
+        grays = _gray_gradient(len(w_sessions))
+        for s, gray in zip(w_sessions, grays):
             t_min, cum_cm = cumulative_distance_series(s["df"])
-            ax.plot(t_min, cum_cm, linewidth=1.8, color=c,
+            ax.plot(t_min, cum_cm, linewidth=1.6, color=gray,
+                    linestyle=WORM_LINE[w]["linestyle"],
                     label=f"Session {s['session']}")
-        _style_ax(ax, f"{w} — Cumulative Distance",
-                  "Time (min)", "Cumulative Distance (cm)")
+        _style_ax(ax,
+                  f"Time within {w} session (min)",
+                  "Cumulative distance traveled (cm)")
         ax.legend(fontsize=9, frameon=False, loc="upper left")
 
     fig2.tight_layout()
@@ -269,37 +289,42 @@ def main():
     print("Saved: cumulative_distance.png")
 
     # ======================================================================
-    # FIGURE 3 — Time to first sustained stop (grouped bar)
+    # FIGURE 3 — Time to first sustained stop (grouped bar, grayscale)
+    # "Never stopped" bars get a light-gray fill (overrides worm style) so
+    # they read as a different category, not a third worm.
     # ======================================================================
     fig3, ax3 = plt.subplots(figsize=(8, 5))
+    NEVER_FILL = "0.8"  # light gray
 
     for i, w in enumerate(worms):
         vals = []
-        hatches = []
+        never_mask = []
         for sn in session_nums:
             ts = stop_table.get((w, sn))
             if ts is None:
                 vals.append(max_time_min)
-                hatches.append("//")
+                never_mask.append(True)
             else:
                 vals.append(ts)
-                hatches.append("")
+                never_mask.append(False)
 
         bars = ax3.bar(x + i * bar_w, vals, bar_w, label=w,
-                       color=WORM_COLORS[w], edgecolor="white", linewidth=0.5)
-        # Apply per-bar hatching for "never stopped" sessions
-        for bar, h in zip(bars, hatches):
-            if h:
-                bar.set_hatch(h)
-                bar.set_edgecolor("white")
+                       facecolor=WORM_BAR[w]["facecolor"],
+                       hatch=WORM_BAR[w]["hatch"],
+                       edgecolor=WORM_BAR[w]["edgecolor"],
+                       linewidth=1.0)
+        for bar, never in zip(bars, never_mask):
+            if never:
+                bar.set_facecolor(NEVER_FILL)
+                bar.set_hatch("")  # drop the worm-style hatch so it reads as a flag
 
     ax3.set_xticks(x + bar_w / 2)
     ax3.set_xticklabels([str(s) for s in session_nums])
-    _style_ax(ax3, "Time to First Sustained Stop (≥60 s below 0.1 mm/s)",
-              "Session", "Time to Stop (min)")
+    _style_ax(ax3, "Session number",
+              "Time to first sustained stop, min "
+              "(≥60 s below 0.1 mm/s; gray = never stopped)")
     ax3.legend(fontsize=11, frameon=False)
-    # Add note about hatched bars
-    ax3.annotate("Hatched = never stopped for ≥60 s",
+    ax3.annotate("Light gray = never stopped for ≥60 s",
                  xy=(0.98, 0.97), xycoords="axes fraction",
                  ha="right", va="top", fontsize=9, fontstyle="italic",
                  color="gray")

@@ -217,7 +217,7 @@ def analyze_movement_timecourse(data, window_sec=300):
 # ── Plotting ─────────────────────────────────────────────────────────
 
 def plot_total_distance(results, output_dir, worm_name):
-    """Bar chart of total distance per session for one worm."""
+    """Bar chart of total distance per session for one worm (APA grayscale)."""
     sessions = [k for k in results if k.startswith(worm_name)]
     if not sessions:
         return
@@ -228,19 +228,25 @@ def plot_total_distance(results, output_dir, worm_name):
 
     fig, ax1 = plt.subplots(figsize=(8, 5))
 
-    bars = ax1.bar(labels, distances, color="#4C72B0", alpha=0.85, label="Distance (cm)")
-    ax1.set_xlabel("Session", fontsize=12)
-    ax1.set_ylabel("Total Distance Traveled (cm)", fontsize=12, color="#4C72B0")
-    ax1.tick_params(axis="y", labelcolor="#4C72B0")
+    # Bubba = solid black, Champ = white with diagonal hatching.
+    if worm_name == "Champ":
+        bars = ax1.bar(labels, distances, facecolor="white", hatch="///",
+                       edgecolor="black", linewidth=1.0)
+    else:
+        bars = ax1.bar(labels, distances, facecolor="black",
+                       edgecolor="black", linewidth=1.0)
 
     # Annotate bars with detection rate
     for bar, rate in zip(bars, det_rates):
         ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
-                 f"{rate:.0f}%", ha="center", va="bottom", fontsize=9, color="gray")
+                 f"{rate:.0f}%", ha="center", va="bottom", fontsize=9, color="black")
 
-    ax1.set_title(f"{worm_name} — Total Distance per Session\n(% = detection rate)",
-                  fontsize=13, fontweight="bold")
+    ax1.set_xlabel(f"{worm_name} session number "
+                   "(percentages = detection rate)", fontsize=12)
+    ax1.set_ylabel("Total distance traveled (cm)", fontsize=12)
     ax1.set_ylim(bottom=0)
+    ax1.spines["top"].set_visible(False)
+    ax1.spines["right"].set_visible(False)
 
     plt.tight_layout()
     path = os.path.join(output_dir, f"{worm_name}_total_distance.png")
@@ -250,7 +256,7 @@ def plot_total_distance(results, output_dir, worm_name):
 
 
 def plot_speed_timecourse(sessions_data, timecourses, output_dir, worm_name):
-    """Speed over time for all sessions of one worm, stacked."""
+    """Speed over time for all sessions of one worm, stacked (APA grayscale)."""
     worm_sessions = [k for k in sessions_data if k.startswith(worm_name)]
     if not worm_sessions:
         return
@@ -260,37 +266,41 @@ def plot_speed_timecourse(sessions_data, timecourses, output_dir, worm_name):
     if n == 1:
         axes = [axes]
 
-    colors = plt.cm.viridis(np.linspace(0.2, 0.8, n))
+    # Light-to-dark gray gradient across sessions.
+    grays = [str(g) for g in np.linspace(0.65, 0.0, n)]
 
     for i, (sess_name, ax) in enumerate(zip(worm_sessions, axes)):
         tc = timecourses[sess_name]
         label = sess_name.split("_")[1]
 
-        # Plot raw speed as faint dots
+        # Raw speed as faint dots
         valid = ~np.isnan(tc["raw_speed"])
         ax.scatter(tc["time_min"][valid], tc["raw_speed"][valid],
-                   s=0.3, alpha=0.15, color="gray", rasterized=True)
+                   s=0.3, alpha=0.15, color="0.7", rasterized=True)
 
-        # Plot smoothed speed as line
+        # Smoothed speed as line
         ax.plot(tc["time_min"], tc["smoothed_speed"],
-                color=colors[i], linewidth=1.5, label=f"Session {label}")
+                color=grays[i], linewidth=1.5, label=f"Session {label}")
 
-        # Mark cessation point
+        # Mark cessation point with a thin black dashed line
         if tc["cessation_min"] is not None:
-            ax.axvline(tc["cessation_min"], color="red", linestyle="--",
-                       alpha=0.7, linewidth=1)
+            ax.axvline(tc["cessation_min"], color="black", linestyle="--",
+                       alpha=0.6, linewidth=1)
             ax.text(tc["cessation_min"] + 0.5, ax.get_ylim()[1] * 0.85,
-                    f"Stops: {tc['cessation_min']:.1f} min",
-                    color="red", fontsize=9)
+                    f"Stop: {tc['cessation_min']:.1f} min",
+                    color="black", fontsize=9)
 
-        ax.set_ylabel("Speed\n(mm/s)", fontsize=10)
-        ax.legend(loc="upper right", fontsize=9)
+        ax.set_ylabel("Speed (mm/s)", fontsize=10)
+        ax.legend(loc="upper right", fontsize=9, frameon=False)
         ax.set_ylim(bottom=0)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
 
-    axes[-1].set_xlabel("Time into session (minutes)", fontsize=12)
-    fig.suptitle(f"{worm_name} — Speed Over Time ({tc['window_sec']//60}-min rolling avg)\n"
-                 f"Red dashed = sustained cessation of movement",
-                 fontsize=13, fontweight="bold", y=1.02)
+    axes[-1].set_xlabel(
+        f"Time within {worm_name} session, min "
+        f"({tc['window_sec']//60}-min rolling mean; "
+        f"dashed line = sustained cessation)",
+        fontsize=12)
     plt.tight_layout()
     path = os.path.join(output_dir, f"{worm_name}_speed_timecourse.png")
     fig.savefig(path, dpi=150, bbox_inches="tight")
@@ -299,7 +309,8 @@ def plot_speed_timecourse(sessions_data, timecourses, output_dir, worm_name):
 
 
 def plot_habituation_summary(timecourses, output_dir):
-    """Cross-session comparison: cessation time across repeated exposures."""
+    """Cross-session comparison: cessation time across repeated exposures
+    (APA grayscale: Bubba=filled circle/solid line, Champ=hollow circle/dashed)."""
     worms = OrderedDict()
     for name, tc in timecourses.items():
         worm = name.split("_")[0]
@@ -312,42 +323,47 @@ def plot_habituation_summary(timecourses, output_dir):
 
     fig, ax = plt.subplots(figsize=(8, 5))
 
-    x_offset = 0
-    colors = {"Bubba": "#4C72B0", "Champ": "#DD8452"}
+    worm_marker_style = {
+        "Bubba": {"marker": "o", "facecolor": "black",
+                  "edgecolor": "black", "linestyle": "-"},
+        "Champ": {"marker": "o", "facecolor": "white",
+                  "edgecolor": "black", "linestyle": "--"},
+    }
 
     for worm, sess_list in worms.items():
+        style = worm_marker_style.get(worm,
+                                      {"marker": "s", "facecolor": "0.5",
+                                       "edgecolor": "black", "linestyle": ":"})
         xs = list(range(1, len(sess_list) + 1))
-        ys = []
-        for s in sess_list:
-            if s["cessation_min"] is not None:
-                ys.append(s["cessation_min"])
-            else:
-                ys.append(np.nan)  # never stopped
-
-        color = colors.get(worm, "gray")
+        ys = [s["cessation_min"] if s["cessation_min"] is not None else np.nan
+              for s in sess_list]
         valid = [i for i, y in enumerate(ys) if not np.isnan(y)]
         invalid = [i for i, y in enumerate(ys) if np.isnan(y)]
 
-        # Plot points
+        # Stopped points
         ax.scatter([xs[i] for i in valid], [ys[i] for i in valid],
-                   s=100, color=color, zorder=5, label=worm)
-        ax.scatter([xs[i] for i in invalid],
-                   [60 for _ in invalid],  # plot at top with different marker
-                   s=100, color=color, marker="^", alpha=0.5, zorder=5)
+                   s=100, facecolor=style["facecolor"],
+                   edgecolor=style["edgecolor"], linewidth=1.2,
+                   marker=style["marker"], zorder=5, label=worm)
+        # Never-stopped: triangle at top of plot
+        ax.scatter([xs[i] for i in invalid], [60 for _ in invalid],
+                   s=100, facecolor=style["facecolor"],
+                   edgecolor=style["edgecolor"], linewidth=1.2,
+                   marker="^", zorder=5)
 
-        # Connect with line
+        # Connecting line (black, linestyle distinguishes worm)
         ax.plot(xs, [y if not np.isnan(y) else 60 for y in ys],
-                color=color, alpha=0.5, linestyle="--")
+                color="black", alpha=0.6, linestyle=style["linestyle"],
+                linewidth=1.0)
 
-    ax.set_xlabel("Session Number (repeated exposure)", fontsize=12)
-    ax.set_ylabel("Time to Stop Moving (minutes)", fontsize=12)
-    ax.set_title("Habituation: Does the worm stop sooner with repeated exposure?",
-                 fontsize=13, fontweight="bold")
-    ax.legend(fontsize=11)
+    ax.set_xlabel("Session number (sequential exposures)", fontsize=12)
+    ax.set_ylabel("Time to first sustained stop, min "
+                  "(triangles at 60 = never stopped)", fontsize=12)
     ax.set_xticks(range(1, 6))
     ax.set_ylim(bottom=0)
-    ax.text(0.98, 0.95, "▲ = never stopped during session",
-            transform=ax.transAxes, ha="right", va="top", fontsize=9, color="gray")
+    ax.legend(fontsize=11, frameon=False, loc="lower right")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
 
     plt.tight_layout()
     path = os.path.join(output_dir, "habituation_cessation_summary.png")
