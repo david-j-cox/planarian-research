@@ -13,7 +13,9 @@ Usage:
     python session_analysis.py
 """
 
+import argparse
 import glob
+import os
 import re
 import sys
 
@@ -24,26 +26,24 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-DATA_DIR = "/tmp/tracker_output"
-CSV_PATTERN = f"{DATA_DIR}/*_tracks.csv"
 STOP_SPEED_THRESH = 0.1   # mm/s — below this counts as "stopped"
 STOP_DURATION_THRESH = 60  # seconds of sustained stop to count
 
 WORM_COLORS = {"Bubba": "#3874A8", "Champ": "#E8853A"}  # blue / orange
+ANALYZE_WORMS = set(WORM_COLORS.keys())  # only these names are analyzed
 
 # ---------------------------------------------------------------------------
 # 1. Load and parse all CSVs
 # ---------------------------------------------------------------------------
-def load_sessions():
+def load_sessions(data_dir):
     """Load all session CSVs, return list of dicts with metadata + DataFrame."""
-    csv_files = sorted(glob.glob(CSV_PATTERN))
+    csv_pattern = os.path.join(data_dir, "*_tracks.csv")
+    csv_files = sorted(glob.glob(csv_pattern))
     if not csv_files:
-        sys.exit(f"No CSV files found matching {CSV_PATTERN}")
+        sys.exit(f"No CSV files found matching {csv_pattern}")
 
     sessions = []
     for path in csv_files:
-        # Extract worm name and session number from filename
-        # e.g. Bubba_0001_021426_tracks.csv → Bubba, 1
         basename = path.rsplit("/", 1)[-1]
         match = re.match(r"(\w+?)_(\d+)_\d+_tracks\.csv", basename)
         if not match:
@@ -51,10 +51,11 @@ def load_sessions():
             continue
 
         worm = match.group(1)
+        if worm not in ANALYZE_WORMS:
+            continue
         session_num = int(match.group(2))
 
         df = pd.read_csv(path, skiprows=2)
-        # Coerce numeric columns (empty strings → NaN)
         for col in ("speed_mm_s", "centroid_x_mm", "centroid_y_mm", "time_s"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -131,9 +132,34 @@ def _style_ax(ax, title, xlabel, ylabel):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    sessions = load_sessions()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--data_dir", required=True,
+                    help="Directory containing *_tracks.csv files.")
+    ap.add_argument("--output_dir", default=None,
+                    help="Where to save figures (default: same as data_dir).")
+    args = ap.parse_args()
+    data_dir = args.data_dir
+    output_dir = args.output_dir or data_dir
+
+    sessions = load_sessions(data_dir)
     worms = sorted(set(s["worm"] for s in sessions))
     session_nums = sorted(set(s["session"] for s in sessions))
+
+    # Tracked-vs-imputed breakdown per session (only if `source` column exists).
+    print("\nSource breakdown:")
+    print(f"  {'session':<25}{'tracked%':>10}{'imputed%':>10}{'lost%':>8}")
+    for s in sorted(sessions, key=lambda s: (s["worm"], s["session"])):
+        df = s["df"]
+        n = len(df)
+        if "source" in df.columns and n:
+            src = df["source"].fillna("").astype(str)
+            tracked = (src == "tracked").sum()
+            imputed = src.str.startswith("imputed_").sum() + (src == "human_traced").sum()
+            lost = n - tracked - imputed
+            tag = f"{s['worm']}_{s['session']:04d}"
+            print(f"  {tag:<25}{100*tracked/n:>9.1f}%"
+                  f"{100*imputed/n:>9.1f}%{100*lost/n:>7.1f}%")
 
     # --- Compute metrics ---------------------------------------------------
     dist_table = {}   # (worm, session) → distance_cm
@@ -183,7 +209,7 @@ def main():
               "Session", "Total Distance (cm)")
     ax1.legend(fontsize=11, frameon=False)
     fig1.tight_layout()
-    fig1.savefig(f"{DATA_DIR}/total_distance_per_session.png", dpi=200)
+    fig1.savefig(f"{output_dir}/total_distance_per_session.png", dpi=200)
     print("Saved: total_distance_per_session.png")
 
     # ======================================================================
@@ -203,7 +229,7 @@ def main():
         ax.legend(fontsize=9, frameon=False, loc="upper left")
 
     fig2.tight_layout()
-    fig2.savefig(f"{DATA_DIR}/cumulative_distance.png", dpi=200)
+    fig2.savefig(f"{output_dir}/cumulative_distance.png", dpi=200)
     print("Saved: cumulative_distance.png")
 
     # ======================================================================
@@ -242,10 +268,10 @@ def main():
                  ha="right", va="top", fontsize=9, fontstyle="italic",
                  color="gray")
     fig3.tight_layout()
-    fig3.savefig(f"{DATA_DIR}/time_to_stop.png", dpi=200)
+    fig3.savefig(f"{output_dir}/time_to_stop.png", dpi=200)
     print("Saved: time_to_stop.png")
 
-    plt.show()
+    plt.close("all")
 
 
 if __name__ == "__main__":
