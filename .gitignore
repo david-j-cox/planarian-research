@@ -23,6 +23,20 @@ scripts_notebooks/runs/
 # OS
 .DS_Store
 
+# Claude Code session state
+.claude/
+
+# Local secrets
+*.token
+.yuja_token
+
+# Temp files from atomic writes
+*.tmp
+
+# YuJa scratch + manifest (per-machine, not source)
+OpenDishWork/yuja_scratch/
+OpenDishWork/yuja_manifest.json
+
 # Large binaries / images
 *.xlsx
 *.pdf
