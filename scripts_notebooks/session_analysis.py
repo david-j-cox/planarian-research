@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import glob
+import json
 import os
 import re
 import sys
@@ -35,8 +36,24 @@ ANALYZE_WORMS = set(WORM_COLORS.keys())  # only these names are analyzed
 # ---------------------------------------------------------------------------
 # 1. Load and parse all CSVs
 # ---------------------------------------------------------------------------
-def load_sessions(data_dir):
-    """Load all session CSVs, return list of dicts with metadata + DataFrame."""
+def _load_truncations(repo_root):
+    """Load per-session truncate_at_s overrides from session_truncations.json
+    at the repo root. Missing file = no truncations (return empty dict).
+    """
+    path = os.path.join(repo_root, "session_truncations.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return {k: v for k, v in json.load(f).items() if not k.startswith("_")}
+
+
+def load_sessions(data_dir, truncations=None):
+    """Load all session CSVs, return list of dicts with metadata + DataFrame.
+
+    `truncations` maps session_base → {"truncate_at_s": float, ...}; matching
+    sessions are clipped to time_s < truncate_at_s.
+    """
+    truncations = truncations or {}
     csv_pattern = os.path.join(data_dir, "*_tracks.csv")
     csv_files = sorted(glob.glob(csv_pattern))
     if not csv_files:
@@ -45,6 +62,7 @@ def load_sessions(data_dir):
     sessions = []
     for path in csv_files:
         basename = path.rsplit("/", 1)[-1]
+        session_base = basename.replace("_tracks.csv", "")
         match = re.match(r"(\w+?)_(\d+)_\d+_tracks\.csv", basename)
         if not match:
             print(f"Skipping unrecognised file: {basename}")
@@ -58,6 +76,18 @@ def load_sessions(data_dir):
         df = pd.read_csv(path, skiprows=2)
         for col in ("speed_mm_s", "centroid_x_mm", "centroid_y_mm", "time_s"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        # Optional truncation: clip to time_s < cutoff. Done at load time so
+        # every downstream metric (distance, stop-time, cumulative) sees the
+        # trimmed frame.
+        trunc = truncations.get(session_base)
+        if trunc and "truncate_at_s" in trunc:
+            cutoff = float(trunc["truncate_at_s"])
+            before = len(df)
+            df = df[df["time_s"] < cutoff].reset_index(drop=True)
+            print(f"  [truncate] {session_base}: dropped {before - len(df)} "
+                  f"rows past t={cutoff:.1f}s "
+                  f"({trunc.get('reason', 'no reason given')})")
 
         sessions.append({
             "worm": worm,
@@ -142,7 +172,13 @@ def main():
     data_dir = args.data_dir
     output_dir = args.output_dir or data_dir
 
-    sessions = load_sessions(data_dir)
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    truncations = _load_truncations(repo_root)
+    if truncations:
+        print(f"Truncations from session_truncations.json:")
+        for k in truncations:
+            print(f"  {k}: truncate_at_s={truncations[k].get('truncate_at_s')}")
+    sessions = load_sessions(data_dir, truncations=truncations)
     worms = sorted(set(s["worm"] for s in sessions))
     session_nums = sorted(set(s["session"] for s in sessions))
 

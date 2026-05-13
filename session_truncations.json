@@ -1,0 +1,7 @@
+{
+  "_doc": "Per-session analysis-time truncations. Keys are session base names (no _tracks.csv). truncate_at_s = drop rows with time_s >= this value. Use when a session has a long unrecoverable tracker-loss stretch that would bias the metrics.",
+  "Bubba_0004_021526": {
+    "truncate_at_s": 2564.5,
+    "reason": "Worm moved out of trackable region at minute 42; 7-min unrecoverable gap. See triage 2026-05-13."
+  }
+}

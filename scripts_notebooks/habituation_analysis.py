@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import csv
+import json
 import os
 import glob
 import re
@@ -23,10 +24,26 @@ import matplotlib.pyplot as plt
 from collections import OrderedDict
 
 
+# Only analyze files whose worm name is in this set (excludes yuja_, etc.)
+ANALYZE_WORMS = {"Bubba", "Champ"}
+
+
+def _load_truncations(repo_root):
+    """Per-session truncate_at_s overrides from session_truncations.json."""
+    path = os.path.join(repo_root, "session_truncations.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return {k: v for k, v in json.load(f).items() if not k.startswith("_")}
+
+
 # ── Data loading ─────────────────────────────────────────────────────
 
-def load_session(csv_path):
-    """Load a tracking CSV and return structured data as a dict of arrays."""
+def load_session(csv_path, truncate_at_s=None):
+    """Load a tracking CSV and return structured data as a dict of arrays.
+
+    If truncate_at_s is given, rows with time_s >= cutoff are dropped at load.
+    """
     with open(csv_path) as f:
         lines = f.readlines()
 
@@ -44,6 +61,8 @@ def load_session(csv_path):
 
     for r in rows:
         t = float(r["time_s"])
+        if truncate_at_s is not None and t >= truncate_at_s:
+            continue
         has_det = bool(r["centroid_x_mm"].strip())
         time_s.append(t)
         detected.append(has_det)
@@ -373,6 +392,14 @@ def main():
     output_dir = args.output_dir or args.data_dir
     os.makedirs(output_dir, exist_ok=True)
 
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    truncations = _load_truncations(repo_root)
+    if truncations:
+        print("Truncations from session_truncations.json:")
+        for k, v in truncations.items():
+            print(f"  {k}: truncate_at_s={v.get('truncate_at_s')} "
+                  f"({v.get('reason', '')})")
+
     # Find all track CSVs
     csv_files = sorted(glob.glob(os.path.join(args.data_dir, "*_tracks.csv")))
     if not csv_files:
@@ -381,14 +408,19 @@ def main():
 
     print(f"Found {len(csv_files)} session files\n")
 
-    # Load all sessions
+    # Load all sessions (filter to Bubba/Champ only).
     sessions = OrderedDict()
     for f in csv_files:
         name = os.path.basename(f).replace("_tracks.csv", "")
-        sessions[name] = load_session(f)
+        worm_match = re.match(r"(\w+?)_", name)
+        if not worm_match or worm_match.group(1) not in ANALYZE_WORMS:
+            continue
+        trunc = truncations.get(name, {}).get("truncate_at_s")
+        sessions[name] = load_session(f, truncate_at_s=trunc)
         det_pct = np.mean(sessions[name]["detected"]) * 100
+        note = f" [truncated at {trunc:.1f}s]" if trunc else ""
         print(f"  Loaded {name}: {len(sessions[name]['time_s'])} frames, "
-              f"{det_pct:.1f}% detected")
+              f"{det_pct:.1f}% detected{note}")
 
     # Analysis (a): Total distance
     print("\n── Analysis (a): Total Distance ──")
