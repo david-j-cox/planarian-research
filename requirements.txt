@@ -1,0 +1,9 @@
+# Python >= 3.11 recommended (developed on 3.11.3).
+# All HTTP calls use stdlib urllib.request — no `requests` dependency.
+
+numpy>=2.0
+pandas>=2.2
+scipy>=1.13
+opencv-python>=4.10
+matplotlib>=3.9
+tqdm>=4.66
