@@ -575,7 +575,8 @@ def build_grid_baseline_median(video_path, dish_mask_bool, n_samples=30):
 def detect_worm(gray, bg_max, dish_mask_bool, last_centroid,
                 min_area, max_area, roi_px, max_jump_px,
                 lost_count, prev_area=None, lost_threshold=30,
-                motion_map=None, grid_baseline=None):
+                motion_map=None, grid_baseline=None,
+                detect_thresh=0.05):
     """Detect the worm in a single frame.
 
     Pipeline:
@@ -631,7 +632,7 @@ def detect_worm(gray, bg_max, dish_mask_bool, last_centroid,
         diff[~dish_mask_bool] = 0
 
         # Threshold: pixels where current frame is notably darker than baseline
-        thresh = 0.05  # ~13 grey levels out of 255
+        thresh = detect_thresh  # default 0.05 (~13 grey levels out of 255)
         bw = (diff >= thresh).astype(np.uint8) * 255
     else:
         # Fallback: old darkness-based method (no grid baseline available)
@@ -2004,7 +2005,8 @@ def process_session(session_dir, calib, args, output_dir, seed=None):
                     gray, bg_max, dish_mask_bool, last_centroid,
                     args.min_area, args.max_area, args.roi_px,
                     args.max_jump_px, lost_count, prev_area=prev_area,
-                    motion_map=motion_map, grid_baseline=grid_baseline)
+                    motion_map=motion_map, grid_baseline=grid_baseline,
+                    detect_thresh=args.detect_thresh)
 
                 if centroid is not None:
                     cx, cy = centroid
@@ -2233,6 +2235,38 @@ def process_session(session_dir, calib, args, output_dir, seed=None):
             tqdm.write(f"    {video_name}: {vid_detections} detections "
                        f"({detect_pct:.0f}%)")
 
+            # ── Detection-rate gate ──
+            # After the first real video, halt if detection is below the
+            # floor. Catches lighting/rig mismatches before we burn hours
+            # processing thousands of bad videos.
+            if (vid_idx == 0
+                    and args.min_detection_rate > 0
+                    and detect_pct < args.min_detection_rate * 100):
+                raise SystemExit(
+                    f"\n  ABORTING SESSION: detection rate "
+                    f"{detect_pct:.1f}% on first video is below the "
+                    f"--min_detection_rate floor of "
+                    f"{args.min_detection_rate * 100:.1f}%.\n"
+                    f"\n  This usually means the tracker's calibration is "
+                    f"wrong for this rig — different lighting (IR vs "
+                    f"visible), different dish size, or different "
+                    f"area/threshold range.\n"
+                    f"\n  Imputation downstream is only meaningful if the "
+                    f"tracker has actually latched onto the worm — bad "
+                    f"detection on video 1 means we have no reliable anchor "
+                    f"for what's being filled in later.\n"
+                    f"\n  Tune the params + click the worm interactively:\n"
+                    f"      python scripts_notebooks/tune_tracker.py \\\n"
+                    f"          --session_dir {session_dir!r} \\\n"
+                    f"          --output_dir {output_dir!r}\n"
+                    f"  This writes a tracker_params.json (tuned threshold/"
+                    f"area/ROI) AND a {{session}}_seed.json (the worm's "
+                    f"clicked starting position). The tracker auto-loads "
+                    f"both on the next run.\n"
+                    f"\n  To proceed without gating (NOT recommended — "
+                    f"imputation will not be trustworthy), re-run with "
+                    f"--min_detection_rate 0.")
+
     total_pct = (total_detections / max(1, total_frames_processed) * 100)
     print(f"  Session complete: {total_frames_processed} frames processed, "
           f"{total_detections} detections ({total_pct:.1f}%)")
@@ -2402,8 +2436,34 @@ Examples:
                          "--no-extract_midline.")
     ap.add_argument("--midline_points", type=int, default=20,
                     help="Maximum midline sample points (default: 20).")
+    ap.add_argument("--detect_thresh", type=float, default=0.05,
+                    help="Baseline-subtraction threshold for worm detection "
+                         "(default: 0.05 = ~13 of 255 grey levels). Lower "
+                         "values catch fainter worms but more noise; higher "
+                         "values reject noise but may miss the worm.")
+    ap.add_argument("--min_detection_rate", type=float, default=0.90,
+                    help="Halt a session if the first video's detection rate "
+                         "is below this fraction (default: 0.90). Set to 0 "
+                         "to disable the gate. When the gate trips, the "
+                         "user is pointed at tune_tracker.py to interactively "
+                         "tune threshold/area/ROI for this rig.")
 
     args = ap.parse_args()
+
+    # ── Per-rig tracker_params.json override ──
+    # If the output_dir contains a tracker_params.json (written by
+    # tune_tracker.py), load it and override the CLI defaults. This is
+    # how a tuned IR rig stays tuned across runs without re-typing flags.
+    if args.output_dir:
+        params_path = os.path.join(args.output_dir, "tracker_params.json")
+        if os.path.exists(params_path):
+            with open(params_path) as f:
+                tuned = json.load(f)
+            print(f"Loading tuned params from {params_path}")
+            for k, v in tuned.items():
+                if hasattr(args, k):
+                    print(f"  override {k}: {getattr(args, k)} -> {v}")
+                    setattr(args, k, v)
 
     # Validate midline dependencies
     if args.extract_midline and not _HAS_MIDLINE:
