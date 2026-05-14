@@ -22,6 +22,46 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+# Share the tracker's cv2-vs-PyAV video opener so the labeler can read MKVs
+# even on macOS opencv-python builds that lack ffmpeg.
+_here = os.path.dirname(os.path.abspath(__file__))
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+from open_dish_tracker import open_video as _open_video  # noqa: E402
+
+
+class _VideoCache:
+    """Tiny LRU-ish cache of open VideoCapture handles."""
+    def __init__(self, max_open: int = 3):
+        self._caps = {}
+        self._order = []
+        self._max = max_open
+
+    def get(self, path):
+        if path in self._caps:
+            self._order.remove(path)
+            self._order.append(path)
+            return self._caps[path]
+        cap = _open_video(path)
+        self._caps[path] = cap
+        self._order.append(path)
+        while len(self._order) > self._max:
+            old = self._order.pop(0)
+            self._caps.pop(old).release()
+        return cap
+
+    def fetch(self, video_path, frame_idx):
+        cap = self.get(video_path)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx))
+        ok, frame = cap.read()
+        return frame if ok else None
+
+    def close(self):
+        for c in self._caps.values():
+            c.release()
+        self._caps.clear()
+        self._order.clear()
+
 # ──────────────────────────────────────────────────────────────────────
 # Constants
 # ──────────────────────────────────────────────────────────────────────
@@ -31,22 +71,17 @@ GAP_THRESH_SEC = 7.0       # skip windows that straddle video boundaries
 ANIM_FPS = 15
 FRAME_DELAY_MS = int(1000 / ANIM_FPS)
 
-# Display geometry
-DISP_W, DISP_H = 1400, 800
-MID_W, MID_H = 400, 500     # midline animation panel
-RIGHT_X = MID_W              # right column starts here
-RIGHT_W = DISP_W - MID_W     # = 1000
-KYMO_H = 220
-SPEED_H = 130
-BLEN_H = 100
-HUD_H = DISP_H - MID_H      # bottom HUD bar spans full width
-# Right-column y offsets
-KYMO_Y = 0
-SPEED_Y = KYMO_H
-BLEN_Y = KYMO_H + SPEED_H
-# Verify layout fits
-assert MID_H + HUD_H == DISP_H, "Layout height mismatch"
-assert KYMO_H + SPEED_H + BLEN_H <= MID_H, "Right column exceeds midline panel height"
+# Display geometry — single big video panel + small body-length trace below.
+DISP_W, DISP_H = 1400, 900
+VIDEO_W = DISP_W           # full-width video
+VIDEO_H = 640              # leaves 260 for trace + HUD
+TRACE_H = 80               # body length sparkline
+HUD_H = DISP_H - VIDEO_H - TRACE_H  # 180
+# Source-pixel crop centered on the worm; stretched to fill VIDEO panel.
+CROP_SIDE_PX = 400
+PAN_STEP_PX = 100
+ZOOM_FACTOR = 1.4
+CROP_MIN_PX = 80
 
 # Color palette
 COL_BG       = (30, 30, 30)
@@ -77,6 +112,9 @@ DEFAULT_BEHAVIORS = [
     "turning", "reversing", "peristalsis",
 ]
 
+# Only surface sessions for these worm names (excludes yuja_, etc.)
+ANALYZE_WORMS = {"Bubba", "Champ"}
+
 # ──────────────────────────────────────────────────────────────────────
 # Data structures
 # ──────────────────────────────────────────────────────────────────────
@@ -91,6 +129,9 @@ class WindowData:
     body_lengths: np.ndarray   # (F,)
     centroids: np.ndarray      # (F, 2) — pixel coords
     times: np.ndarray          # (F,) — seconds
+    video_names: np.ndarray = None   # (F,) — MKV basenames for fetching frames
+    frame_indices: np.ndarray = None  # (F,) — int frame number within each MKV
+    session_dir: str = ""             # absolute path to MKV folder
 
 
 @dataclass
@@ -153,6 +194,10 @@ class SessionData:
             key = (str(self.video_names[i]), int(self.frame_indices[i]))
             key_to_npz[key] = i
 
+        # Track which rows are honestly tracked vs imputed (per `source` col).
+        self.csv_sources = np.empty(self.n_frames, dtype=object)
+        self.csv_sources[:] = ""
+
         with open(csv_path, "r") as f:
             for line in f:
                 if line.startswith("#") or line.startswith('"#'):
@@ -183,6 +228,9 @@ class SessionData:
                         self.csv_body_lengths[npz_idx] = float(bl)
                 except (ValueError, IndexError):
                     pass
+                # source column is index 15
+                if len(parts) > 15:
+                    self.csv_sources[npz_idx] = parts[15].strip()
 
         # Fill NaN centroids from midline means where possible
         nan_mask = np.isnan(self.csv_centroids[:, 0])
@@ -195,11 +243,11 @@ class SessionData:
         if nan_bl.any():
             self.csv_body_lengths[nan_bl] = self.body_lengths_npz[nan_bl]
 
-    def get_window(self, start_idx: int, end_idx: int) -> WindowData:
+    def get_window(self, start_idx: int, end_idx: int,
+                   session_dir: str = "") -> WindowData:
         """Extract a WindowData slice."""
         sl = slice(start_idx, end_idx)
         speeds = self.csv_speeds[sl].copy()
-        # Replace NaN speeds with 0
         speeds[np.isnan(speeds)] = 0.0
         angles = self.csv_angles[sl].copy()
         angles[np.isnan(angles)] = 0.0
@@ -214,6 +262,9 @@ class SessionData:
             body_lengths=bl,
             centroids=self.csv_centroids[sl].copy(),
             times=self.times_s[sl].copy(),
+            video_names=self.video_names[sl].copy(),
+            frame_indices=self.frame_indices[sl].copy(),
+            session_dir=session_dir,
         )
 
 
@@ -222,11 +273,15 @@ class SessionData:
 # ──────────────────────────────────────────────────────────────────────
 
 def discover_sessions(data_dir: str) -> List[str]:
-    """Find all sessions that have both _tracks.csv and _midlines.npz."""
+    """Find all sessions that have both _tracks.csv and _midlines.npz, and
+    whose worm name is in ANALYZE_WORMS."""
     npz_files = glob.glob(os.path.join(data_dir, "*_midlines.npz"))
     sessions = []
     for npz_path in sorted(npz_files):
         name = os.path.basename(npz_path).replace("_midlines.npz", "")
+        worm_match = re.match(r"(\w+?)_", name)
+        if not worm_match or worm_match.group(1) not in ANALYZE_WORMS:
+            continue
         csv_path = os.path.join(data_dir, f"{name}_tracks.csv")
         if os.path.exists(csv_path):
             sessions.append(name)
@@ -266,10 +321,27 @@ def build_manifest(sessions_data: Dict[str, SessionData]) -> List[WindowInfo]:
             curv = sd.curvatures[start:end]
             spd = sd.csv_speeds[start:end]
             bl = sd.csv_body_lengths[start:end]
+            # Skip windows containing any imputed/lost rows.
+            if hasattr(sd, "csv_sources"):
+                wsrc = sd.csv_sources[start:end]
+                if any(s != "tracked" for s in wsrc):
+                    start += stride
+                    continue
+            # Skip windows with implausible centroid jumps (>~5mm in 0.3s →
+            # >~16 mm/s implied speed). These are tracker switches onto a
+            # glare/shadow, not worm motion, and the cropped video panel
+            # would land on empty dish.
+            cx = sd.csv_centroids[start:end, 0]
+            cy = sd.csv_centroids[start:end, 1]
+            if not (np.any(np.isnan(cx)) or np.any(np.isnan(cy))):
+                step_dist_px = np.hypot(np.diff(cx), np.diff(cy))
+                max_step_mm = float(step_dist_px.max()) * sd.mm_per_px
+                if max_step_mm > 5.0:
+                    start += stride
+                    continue
             curv_var = float(np.nanvar(curv)) if curv.size and not np.all(np.isnan(curv)) else 0.0
             spd_var = float(np.nanvar(spd)) if spd.size and not np.all(np.isnan(spd)) else 0.0
             bl_var = float(np.nanvar(bl)) if bl.size and not np.all(np.isnan(bl)) else 0.0
-            # Normalize: curvature is ~0-1 rad, speed ~0-50 px/s, bl ~15-25 px
             activity = curv_var * 100 + spd_var * 0.1 + bl_var * 0.5
 
             wid = f"{session_name}:{start}"
@@ -381,11 +453,12 @@ class LabelManager:
 # ──────────────────────────────────────────────────────────────────────
 
 class Renderer:
-    """Draws the 1400×800 composite display."""
+    """Draws the 1400×900 composite: video panel + body-length sparkline + HUD."""
 
-    def __init__(self):
+    def __init__(self, vcache: _VideoCache):
         self.click_rects: List[ClickRect] = []
-        # Build blue-white-red LUT for kymograph
+        self.vcache = vcache
+        # Build blue-white-red LUT for kymograph (kept for legacy callers; unused).
         self.kymo_lut = self._build_bwr_lut()
 
     @staticmethod
@@ -403,25 +476,129 @@ class Renderer:
         return lut
 
     def render(self, wd: WindowData, anim_frame: int, labels: List[str],
-               behaviors: List[str], info: dict, paused: bool) -> np.ndarray:
-        """Render full composite frame. Returns BGR image."""
+               behaviors: List[str], info: dict, paused: bool,
+               view: Optional[dict] = None) -> np.ndarray:
+        """Render full composite frame. Returns BGR image.
+
+        `view` (optional): {"crop": int, "pan": [int,int], "full_frame": bool}.
+        Defaults to centered crop at CROP_SIDE_PX, no pan, not full-frame.
+        """
         self.click_rects.clear()
         canvas = np.full((DISP_H, DISP_W, 3), COL_BG, dtype=np.uint8)
         n_frames = len(wd.midlines)
         anim_frame = anim_frame % max(1, n_frames)
 
-        # --- Midline animation panel (left) ---
-        self._draw_midline_panel(canvas, wd, anim_frame)
-
-        # --- Right column panels ---
-        self._draw_kymograph(canvas, wd, anim_frame)
-        self._draw_speed_angle(canvas, wd, anim_frame)
-        self._draw_body_length(canvas, wd, anim_frame)
-
-        # --- HUD bar (bottom) ---
+        v = view or {}
+        self._draw_video_panel(
+            canvas, wd, anim_frame,
+            crop_side_px=int(v.get("crop", CROP_SIDE_PX)),
+            pan_offset_px=tuple(v.get("pan", (0, 0))),
+            full_frame=bool(v.get("full_frame", False)))
+        self._draw_body_length_strip(canvas, wd, anim_frame)
         self._draw_hud(canvas, labels, behaviors, info, paused)
 
         return canvas
+
+    def _draw_video_panel(self, canvas, wd: WindowData, anim_frame: int,
+                          crop_side_px: int = CROP_SIDE_PX,
+                          pan_offset_px: tuple = (0, 0),
+                          full_frame: bool = False):
+        """Fetch and display the actual MKV frame, zoomed around the worm
+        centroid + user pan, at user-controlled crop size (or full-frame)."""
+        n = len(wd.video_names) if wd.video_names is not None else 0
+        if n == 0 or not wd.session_dir:
+            canvas[0:VIDEO_H, 0:VIDEO_W] = COL_PANEL_BG
+            cv2.putText(canvas, "(no video)", (VIDEO_W // 2 - 60, VIDEO_H // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, COL_DIM, 2)
+            return
+
+        video_name = str(wd.video_names[anim_frame])
+        frame_idx = int(wd.frame_indices[anim_frame])
+        video_path = os.path.join(wd.session_dir, video_name)
+        bgr = self.vcache.fetch(video_path, frame_idx)
+        if bgr is None:
+            canvas[0:VIDEO_H, 0:VIDEO_W] = COL_PANEL_BG
+            cv2.putText(canvas, f"(frame {frame_idx} not readable)",
+                        (VIDEO_W // 2 - 100, VIDEO_H // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, COL_DIM, 2)
+            return
+
+        ih, iw = bgr.shape[:2]
+        cx, cy = wd.centroids[anim_frame]
+        if np.isnan(cx) or np.isnan(cy):
+            cx, cy = iw / 2.0, ih / 2.0
+        cx += pan_offset_px[0]
+        cy += pan_offset_px[1]
+
+        if full_frame:
+            x0, y0 = 0, 0
+            x1, y1 = iw, ih
+            crop_w, crop_h = iw, ih
+        else:
+            half = crop_side_px / 2.0
+            x0 = int(round(cx - half))
+            y0 = int(round(cy - half))
+            x1 = x0 + crop_side_px
+            y1 = y0 + crop_side_px
+            crop_w = crop_h = crop_side_px
+
+        crop = np.full((crop_h, crop_w, 3), COL_PANEL_BG, dtype=np.uint8)
+        sx0 = max(0, x0); sy0 = max(0, y0)
+        sx1 = min(iw, x1); sy1 = min(ih, y1)
+        if sx1 > sx0 and sy1 > sy0:
+            crop[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = bgr[sy0:sy1, sx0:sx1]
+
+        scale = min(VIDEO_W / crop_w, VIDEO_H / crop_h)
+        nw = int(crop_w * scale)
+        nh = int(crop_h * scale)
+        resized = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        ox = (VIDEO_W - nw) // 2
+        oy = (VIDEO_H - nh) // 2
+        canvas[oy:oy + nh, ox:ox + nw] = resized
+
+        if anim_frame < len(wd.times):
+            t = wd.times[anim_frame] - wd.times[0]
+            zoom_label = "FULL FRAME" if full_frame else f"crop {crop_w}px"
+            label = f"frame {anim_frame + 1}/{n}  t+{t:.1f}s  ({zoom_label})"
+            cv2.putText(canvas, label, (10, 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, COL_TEXT, 1)
+
+    def _draw_body_length_strip(self, canvas, wd: WindowData, anim_frame: int):
+        """Compact body-length-over-time sparkline below the video."""
+        y0 = VIDEO_H
+        panel = canvas[y0:y0 + TRACE_H, 0:DISP_W]
+        panel[:] = COL_PANEL_BG
+        n = len(wd.body_lengths)
+        if n < 2:
+            return
+        margin_l, margin_r, margin_t, margin_b = 60, 20, 18, 14
+        plot_w = DISP_W - margin_l - margin_r
+        plot_h = TRACE_H - margin_t - margin_b
+        cv2.rectangle(panel, (margin_l, margin_t),
+                      (margin_l + plot_w, margin_t + plot_h), COL_GRID, 1)
+        bl = wd.body_lengths.copy()
+        valid = bl > 0
+        if not valid.any():
+            return
+        bl_min = float(np.nanmin(bl[valid])) - 2
+        bl_max = float(np.nanmax(bl[valid])) + 2
+        bl_range = max(bl_max - bl_min, 1.0)
+        xs = np.linspace(0, plot_w - 1, n).astype(np.int32) + margin_l
+        ys = (margin_t + plot_h
+              - ((bl - bl_min) / bl_range * (plot_h - 4) + 2).astype(np.int32))
+        ys = np.clip(ys, margin_t, margin_t + plot_h)
+        pts = np.stack([xs, ys], axis=1)
+        cv2.polylines(panel, [pts], False, (200, 180, 100), 1, cv2.LINE_AA)
+        # Current-frame vertical marker
+        fx = margin_l + int(anim_frame / max(1, n - 1) * (plot_w - 1))
+        cv2.line(panel, (fx, margin_t), (fx, margin_t + plot_h), COL_MARKER, 1)
+        cv2.putText(panel, "Body length (px)", (margin_l, 13),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 180, 100), 1)
+        cv2.putText(panel, f"{bl_max:.0f}", (5, margin_t + 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, COL_DIM, 1)
+        cv2.putText(panel, f"{bl_min:.0f}",
+                    (5, margin_t + plot_h),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, COL_DIM, 1)
 
     def _draw_midline_panel(self, canvas, wd: WindowData, anim_frame: int):
         """Animate 20-point stick figure centered on window mean centroid."""
@@ -443,18 +620,24 @@ class Renderer:
         ox, oy = MID_W // 2, MID_H // 2  # panel center
 
         def to_panel(pts):
-            """Transform pixel coords to panel coords."""
-            return ((pts - [cx, cy]) * scale + [ox, oy]).astype(np.int32)
+            """Transform pixel coords to panel coords. NaN inputs become a
+            sentinel (-99999) so the segment draw can detect & skip them."""
+            arr = (pts - [cx, cy]) * scale + [ox, oy]
+            arr = np.where(np.isnan(arr), -99999, arr)
+            return arr.astype(np.int32)
 
-        # Ghost trail (3 prior frames)
+        # Ghost trail (3 prior frames). Skip segments touching NaN sentinels.
         for gi in range(3, 0, -1):
             gf = (anim_frame - gi) % n_frames
             ghost_pts = to_panel(wd.midlines[gf])
             alpha = 0.15 + 0.1 * (3 - gi)
             ghost_col = tuple(int(c * alpha) for c in (200, 200, 200))
             for j in range(len(ghost_pts) - 1):
-                cv2.line(panel, tuple(ghost_pts[j]), tuple(ghost_pts[j + 1]),
-                         ghost_col, 1, cv2.LINE_AA)
+                p0 = tuple(ghost_pts[j])
+                p1 = tuple(ghost_pts[j + 1])
+                if -99000 in p0 or -99000 in p1:
+                    continue
+                cv2.line(panel, p0, p1, ghost_col, 1, cv2.LINE_AA)
 
         # Current frame midline
         midline = wd.midlines[anim_frame]
@@ -462,24 +645,36 @@ class Renderer:
         n_seg = len(pts) - 1
         curvs = wd.curvatures[anim_frame] if len(wd.curvatures) > anim_frame else np.zeros(16)
 
-        # Draw segments colored by curvature
+        # Draw segments colored by curvature. Skip NaN endpoints or NaN curv.
         for j in range(n_seg):
-            # Map curvature to color intensity
+            p0 = tuple(pts[j])
+            p1 = tuple(pts[j + 1])
+            if -99000 in p0 or -99000 in p1:
+                continue
             if j < len(curvs):
                 c = curvs[j]
-                # Normalize: negative = blue, positive = red, zero = white
-                c_clamp = np.clip(c * 5.0, -1, 1)
-                if c_clamp >= 0:
-                    col = (int(255 * (1 - c_clamp)), int(255 * (1 - c_clamp)), 255)
+                if np.isnan(c):
+                    col = COL_TEXT
                 else:
-                    col = (255, int(255 * (1 + c_clamp)), int(255 * (1 + c_clamp)))
+                    # Negative = blue, positive = red, zero = white.
+                    c_clamp = float(np.clip(c * 5.0, -1, 1))
+                    if c_clamp >= 0:
+                        col = (int(255 * (1 - c_clamp)),
+                               int(255 * (1 - c_clamp)), 255)
+                    else:
+                        col = (255, int(255 * (1 + c_clamp)),
+                               int(255 * (1 + c_clamp)))
             else:
                 col = COL_TEXT
-            cv2.line(panel, tuple(pts[j]), tuple(pts[j + 1]), col, 2, cv2.LINE_AA)
+            cv2.line(panel, p0, p1, col, 2, cv2.LINE_AA)
 
-        # Head = red dot, tail = blue dot
-        cv2.circle(panel, tuple(pts[0]), 5, COL_HEAD, -1, cv2.LINE_AA)
-        cv2.circle(panel, tuple(pts[-1]), 4, COL_TAIL, -1, cv2.LINE_AA)
+        # Head = red dot, tail = blue dot (skip if NaN)
+        head = tuple(pts[0])
+        tail = tuple(pts[-1])
+        if -99000 not in head:
+            cv2.circle(panel, head, 5, COL_HEAD, -1, cv2.LINE_AA)
+        if -99000 not in tail:
+            cv2.circle(panel, tail, 4, COL_TAIL, -1, cv2.LINE_AA)
 
         # Frame counter
         cv2.putText(panel, f"Frame {anim_frame + 1}/{n_frames}",
@@ -638,7 +833,7 @@ class Renderer:
     def _draw_hud(self, canvas, labels: List[str], behaviors: List[str],
                   info: dict, paused: bool):
         """Bottom HUD: session info, behavior label tags, progress, shortcuts."""
-        y0 = MID_H
+        y0 = VIDEO_H + TRACE_H
         hud = canvas[y0:DISP_H, 0:DISP_W]
         hud[:] = (25, 25, 25)
 
@@ -745,16 +940,15 @@ class Renderer:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, COL_TEXT, 1)
             self.click_rects.append(ClickRect(bx, row3_y, bx + tw, row3_y + bh, action))
 
-        # Shortcuts reference
-        shortcuts = ("Enter/d:accept  a:back  f/b:+/-10  u:unlabeled  "
-                     "s:sort  r:reset  Space:pause  q:quit")
-        cv2.putText(canvas, shortcuts, (10, DISP_H - 15),
+        # Shortcuts reference (split into two lines so it fits).
+        sh1 = ("Enter/d:accept  a:back  f/b:+/-10  u:unlabeled  "
+               "s:sort  r:reset  Space:pause  q:quit")
+        sh2 = ("View — arrows:pan  [ / ]:zoom-out / zoom-in  "
+               "v:full-frame  g:recenter   (paused: , / . step frame)")
+        cv2.putText(canvas, sh1, (10, DISP_H - 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, COL_DIM, 1)
-
-        # Arrow keys hint when paused
-        if paused:
-            cv2.putText(canvas, "Arrow keys: step frames", (10, DISP_H - 35),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, COL_DIM, 1)
+        cv2.putText(canvas, sh2, (10, DISP_H - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, COL_DIM, 1)
 
     def _label_color_for(self, idx: int) -> Tuple[int, int, int]:
         if idx < len(LABEL_COLORS):
@@ -814,7 +1008,9 @@ def sort_windows(windows: List[WindowInfo], mode: str,
 SORT_MODES = ["most_active", "sequential", "unlabeled"]
 
 
-def run_labeler(data_dir: str, sort_mode: Optional[str] = None):
+def run_labeler(data_dir: str, sessions_root: str,
+                sort_mode: Optional[str] = None,
+                only_session: Optional[str] = None):
     """Main entry point: build manifest, load data, run interactive loop."""
     manifest_path = os.path.join(data_dir, "behavior_manifest.json")
     labels_path = os.path.join(data_dir, "behavior_labels.json")
@@ -848,6 +1044,15 @@ def run_labeler(data_dir: str, sort_mode: Optional[str] = None):
         print("No windows generated. Check data.")
         sys.exit(1)
 
+    # Optional --only_session filter (prefix match, so "Champ_" works too).
+    if only_session:
+        before = len(windows)
+        windows = [w for w in windows if w.session.startswith(only_session)]
+        print(f"--only_session {only_session!r}: kept {len(windows)} of {before} windows")
+        if not windows:
+            print("No windows match. Check the prefix.")
+            sys.exit(1)
+
     # --- Label manager ---
     label_mgr = LabelManager(labels_path)
     if sort_mode:
@@ -857,10 +1062,13 @@ def run_labeler(data_dir: str, sort_mode: Optional[str] = None):
     order = sort_windows(windows, label_mgr.sort_mode, label_mgr)
 
     # --- Resume position ---
-    pos = min(label_mgr.last_position, len(order) - 1)
+    # When filtering by session, the saved last_position is an offset into the
+    # *full* order, which is meaningless after filtering — start from 0 instead.
+    pos = 0 if only_session else min(label_mgr.last_position, len(order) - 1)
 
     # --- Renderer ---
-    renderer = Renderer()
+    vcache = _VideoCache(max_open=2)
+    renderer = Renderer(vcache)
 
     # --- OpenCV window ---
     win_name = "Planarian Behavior Labeler"
@@ -878,6 +1086,8 @@ def run_labeler(data_dir: str, sort_mode: Optional[str] = None):
     anim_frame = 0
     paused = False
     running = True
+    # View state for the video panel (pan/zoom/full-frame). Reset each clip.
+    view = {"crop": CROP_SIDE_PX, "pan": [0, 0], "full_frame": False}
 
     print(f"\nLabeler ready. {len(windows)} clips, {label_mgr.sort_mode} sort.")
     print(f"Resuming at position {pos + 1}.")
@@ -892,7 +1102,8 @@ def run_labeler(data_dir: str, sort_mode: Optional[str] = None):
             pos = (pos + 1) % len(order)
             continue
 
-        wd = sd.get_window(w.start_idx, w.end_idx)
+        wd = sd.get_window(w.start_idx, w.end_idx,
+                           session_dir=os.path.join(sessions_root, w.session))
         n_data = len(wd.midlines)
         current_labels = label_mgr.get_labels(w.window_id)
 
@@ -910,12 +1121,16 @@ def run_labeler(data_dir: str, sort_mode: Optional[str] = None):
             "activity": w.activity_score,
         }
 
+        # Reset view state on each new clip so panning doesn't carry over.
+        view = {"crop": CROP_SIDE_PX, "pan": [0, 0], "full_frame": False}
+
         # Inner animation loop for this clip
         clip_done = False
         while not clip_done and running:
             # Render
             frame = renderer.render(wd, anim_frame, current_labels,
-                                    label_mgr.behaviors, info, paused)
+                                    label_mgr.behaviors, info, paused,
+                                    view=view)
             cv2.imshow(win_name, frame)
 
             # Handle input (non-blocking wait)
@@ -1050,14 +1265,34 @@ def run_labeler(data_dir: str, sort_mode: Optional[str] = None):
             elif key == ord(' '):  # space — pause/resume
                 paused = not paused
 
-            elif key == 81 and paused:  # left arrow (macOS)
+            # Frame stepping (when paused): ',' = back, '.' = forward.
+            elif key == ord(',') and paused:
                 anim_frame = (anim_frame - 1) % max(1, n_data)
-            elif key == 83 and paused:  # right arrow (macOS)
+            elif key == ord('.') and paused:
                 anim_frame = (anim_frame + 1) % max(1, n_data)
-            elif key == 2 and paused:   # left arrow (Linux)
-                anim_frame = (anim_frame - 1) % max(1, n_data)
-            elif key == 3 and paused:   # right arrow (Linux)
-                anim_frame = (anim_frame + 1) % max(1, n_data)
+
+            # View controls — pan/zoom/full-frame/recenter.
+            # Arrow keys: 81=left, 82=up, 83=right, 84=down (cv2 codes).
+            elif key == 81:
+                view["pan"][0] -= PAN_STEP_PX
+            elif key == 83:
+                view["pan"][0] += PAN_STEP_PX
+            elif key == 82:
+                view["pan"][1] -= PAN_STEP_PX
+            elif key == 84:
+                view["pan"][1] += PAN_STEP_PX
+            elif key == ord('['):
+                view["crop"] = int(view["crop"] * ZOOM_FACTOR)
+                view["full_frame"] = False
+            elif key == ord(']'):
+                view["crop"] = max(CROP_MIN_PX, int(view["crop"] / ZOOM_FACTOR))
+                view["full_frame"] = False
+            elif key == ord('v'):
+                view["full_frame"] = not view["full_frame"]
+            elif key == ord('g'):
+                view["pan"] = [0, 0]
+                view["crop"] = CROP_SIDE_PX
+                view["full_frame"] = False
 
             # Number keys 1-9, 0 for behavior toggles
             elif ord('1') <= key <= ord('9'):
@@ -1084,6 +1319,7 @@ def run_labeler(data_dir: str, sort_mode: Optional[str] = None):
             label_mgr.save()
             running = False
 
+    vcache.close()
     cv2.destroyAllWindows()
     print(f"\nLabels saved to {labels_path}")
     n_labeled = sum(1 for wi in windows if label_mgr.is_labeled(wi.window_id))
@@ -1097,10 +1333,16 @@ def run_labeler(data_dir: str, sort_mode: Optional[str] = None):
 def main():
     parser = argparse.ArgumentParser(
         description="Interactive behavior labeling tool for planarian tracking data.")
-    parser.add_argument("--data_dir", default="/tmp/tracker_output",
+    parser.add_argument("--data_dir", default="OpenDishWork/tracker_results",
                         help="Directory containing *_tracks.csv, *_midlines.npz, *_calibration.json")
+    parser.add_argument("--sessions_root", default="OpenDishWork",
+                        help="Directory containing per-session MKV folders.")
     parser.add_argument("--sort", choices=SORT_MODES, default=None,
                         help="Initial sort mode (default: resume previous or most_active)")
+    parser.add_argument("--only_session", default=None,
+                        help="Restrict to one session (e.g. Champ_0001_021426). "
+                             "Matches by prefix, so 'Champ_' also works to "
+                             "filter all Champ sessions.")
     parser.add_argument("--rebuild_manifest", action="store_true",
                         help="Force rebuild of window manifest")
     args = parser.parse_args()
@@ -1111,7 +1353,8 @@ def main():
             os.remove(manifest_path)
             print(f"Removed {manifest_path}, will rebuild.")
 
-    run_labeler(args.data_dir, sort_mode=args.sort)
+    run_labeler(args.data_dir, args.sessions_root, sort_mode=args.sort,
+                only_session=args.only_session)
 
 
 if __name__ == "__main__":
