@@ -30,6 +30,15 @@ import pandas as pd
 STOP_SPEED_THRESH = 0.1   # mm/s — below this counts as "stopped"
 STOP_DURATION_THRESH = 60  # seconds of sustained stop to count
 
+# Implausibly fast frames are almost always tracker blob-jumps (latched onto
+# debris, reflection, or noise across the dish). Real planarian glide speed
+# tops out near 3 mm/s; >15 mm/s is unambiguous tracker error.
+TRACKER_ERROR_SPEED_MM_S = 15.0
+ANALYZABLE_SOURCES = {
+    "tracked", "imputed_short", "imputed_bisect",
+    "imputed_anchored", "human_traced",
+}
+
 # APA grayscale styling. Worms are distinguished by fill (solid black vs
 # hatched white) in bar plots, and linestyle (solid vs dashed) in line plots.
 # Sessions within a worm are a light-to-dark gray gradient.
@@ -92,6 +101,19 @@ def load_sessions(data_dir, truncations=None):
         for col in ("speed_mm_s", "centroid_x_mm", "centroid_y_mm", "time_s"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+        # Re-tag tracker errors: rows currently labeled 'tracked' but with
+        # implausibly fast speed are reclassified to 'tracker_error' so they
+        # drop out of every downstream metric.
+        if "source" in df.columns:
+            mask = (df["source"].fillna("") == "tracked") & \
+                   (df["speed_mm_s"] > TRACKER_ERROR_SPEED_MM_S)
+            n_flagged = int(mask.sum())
+            if n_flagged:
+                df.loc[mask, "source"] = "tracker_error"
+                print(f"  [tracker-error] {session_base}: re-tagged "
+                      f"{n_flagged} rows with speed > "
+                      f"{TRACKER_ERROR_SPEED_MM_S} mm/s")
+
         # Optional truncation: clip to time_s < cutoff. Done at load time so
         # every downstream metric (distance, stop-time, cumulative) sees the
         # trimmed frame.
@@ -114,13 +136,22 @@ def load_sessions(data_dir, truncations=None):
     return sessions
 
 
+def _analyzable_mask(df):
+    """Boolean Series: True where the row should contribute to metrics."""
+    if "source" not in df.columns:
+        return pd.Series([True] * len(df), index=df.index)
+    return df["source"].fillna("").isin(ANALYZABLE_SOURCES)
+
+
 # ---------------------------------------------------------------------------
 # 2. Compute total distance per session
 # ---------------------------------------------------------------------------
 def compute_distance(df):
-    """Return total distance (mm) from speed × dt integration."""
+    """Return total distance (mm) from speed × dt integration. Tracker-error
+    and LOST rows zero out so they don't contribute."""
     dt = df["time_s"].diff()
-    incremental = df["speed_mm_s"] * dt  # mm
+    speed = df["speed_mm_s"].where(_analyzable_mask(df), 0.0)
+    incremental = speed * dt  # mm
     return incremental.sum()  # NaN terms drop automatically
 
 
@@ -132,13 +163,21 @@ def compute_time_to_stop(df, speed_thresh=STOP_SPEED_THRESH,
     """
     Find the first moment the worm is stopped (speed < thresh) for at least
     `duration_thresh` consecutive seconds.  Returns time in seconds, or None.
+
+    Tracker-error and LOST rows are treated as 'unknown' (neither stopped nor
+    moving): they break a stop streak rather than count toward it, so we
+    don't falsely call a tracker dropout a 'stop'.
     """
-    stopped = df["speed_mm_s"].fillna(0) < speed_thresh
+    analyzable = _analyzable_mask(df).values
+    stopped = (df["speed_mm_s"].fillna(0) < speed_thresh).values & analyzable
     times = df["time_s"].values
 
     run_start = None
-    for i, is_stopped in enumerate(stopped):
-        if is_stopped:
+    for i in range(len(stopped)):
+        if not analyzable[i]:
+            run_start = None  # unknown state breaks the streak
+            continue
+        if stopped[i]:
             if run_start is None:
                 run_start = i
             elapsed = times[i] - times[run_start]
@@ -154,9 +193,11 @@ def compute_time_to_stop(df, speed_thresh=STOP_SPEED_THRESH,
 # 4. Compute cumulative distance series
 # ---------------------------------------------------------------------------
 def cumulative_distance_series(df):
-    """Return (time_minutes, cumulative_distance_cm) arrays."""
+    """Return (time_minutes, cumulative_distance_cm) arrays. Non-analyzable
+    rows hold the cumulative flat (no contribution)."""
     dt = df["time_s"].diff().fillna(0)
-    incremental = (df["speed_mm_s"].fillna(0) * dt)
+    speed = df["speed_mm_s"].where(_analyzable_mask(df), 0.0).fillna(0)
+    incremental = speed * dt
     cum_mm = incremental.cumsum()
     return df["time_s"].values / 60.0, cum_mm.values / 10.0  # min, cm
 
@@ -166,9 +207,9 @@ def cumulative_distance_series(df):
 # ---------------------------------------------------------------------------
 def _style_ax(ax, xlabel, ylabel):
     """APA-ish styling: no title, clean spines, no top/right borders."""
-    ax.set_xlabel(xlabel, fontsize=12)
-    ax.set_ylabel(ylabel, fontsize=12)
-    ax.tick_params(labelsize=11)
+    ax.set_xlabel(xlabel, fontsize=24, labelpad=12)
+    ax.set_ylabel(ylabel, fontsize=24, labelpad=12)
+    ax.tick_params(labelsize=14)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
@@ -197,9 +238,10 @@ def main():
     worms = sorted(set(s["worm"] for s in sessions))
     session_nums = sorted(set(s["session"] for s in sessions))
 
-    # Tracked-vs-imputed breakdown per session (only if `source` column exists).
+    # Tracked-vs-imputed-vs-error breakdown per session.
     print("\nSource breakdown:")
-    print(f"  {'session':<25}{'tracked%':>10}{'imputed%':>10}{'lost%':>8}")
+    print(f"  {'session':<25}{'tracked%':>10}{'imputed%':>10}"
+          f"{'error%':>9}{'lost%':>8}")
     for s in sorted(sessions, key=lambda s: (s["worm"], s["session"])):
         df = s["df"]
         n = len(df)
@@ -207,10 +249,12 @@ def main():
             src = df["source"].fillna("").astype(str)
             tracked = (src == "tracked").sum()
             imputed = src.str.startswith("imputed_").sum() + (src == "human_traced").sum()
-            lost = n - tracked - imputed
+            err = (src == "tracker_error").sum()
+            lost = n - tracked - imputed - err
             tag = f"{s['worm']}_{s['session']:04d}"
             print(f"  {tag:<25}{100*tracked/n:>9.1f}%"
-                  f"{100*imputed/n:>9.1f}%{100*lost/n:>7.1f}%")
+                  f"{100*imputed/n:>9.1f}%"
+                  f"{100*err/n:>8.1f}%{100*lost/n:>7.1f}%")
 
     # --- Compute metrics ---------------------------------------------------
     dist_table = {}   # (worm, session) → distance_cm
@@ -259,8 +303,8 @@ def main():
 
     ax1.set_xticks(x + bar_w / 2)
     ax1.set_xticklabels([str(s) for s in session_nums])
-    _style_ax(ax1, "Session number", "Total distance traveled (cm)")
-    ax1.legend(fontsize=11, frameon=False)
+    _style_ax(ax1, "Session Number", "Total Distance\nTraveled (cm)")
+    ax1.legend(fontsize=14, frameon=False)
     fig1.tight_layout()
     fig1.savefig(f"{output_dir}/total_distance_per_session.png", dpi=200)
     print("Saved: total_distance_per_session.png")
@@ -279,10 +323,8 @@ def main():
             ax.plot(t_min, cum_cm, linewidth=1.6, color=gray,
                     linestyle=WORM_LINE[w]["linestyle"],
                     label=f"Session {s['session']}")
-        _style_ax(ax,
-                  f"Time within {w} session (min)",
-                  "Cumulative distance traveled (cm)")
-        ax.legend(fontsize=9, frameon=False, loc="upper left")
+        _style_ax(ax, "Time (min)", "Cumulative Distance\nTraveled (cm)")
+        ax.legend(fontsize=12, frameon=False, loc="upper left")
 
     fig2.tight_layout()
     fig2.savefig(f"{output_dir}/cumulative_distance.png", dpi=200)
@@ -320,14 +362,8 @@ def main():
 
     ax3.set_xticks(x + bar_w / 2)
     ax3.set_xticklabels([str(s) for s in session_nums])
-    _style_ax(ax3, "Session number",
-              "Time to first sustained stop, min "
-              "(≥60 s below 0.1 mm/s; gray = never stopped)")
-    ax3.legend(fontsize=11, frameon=False)
-    ax3.annotate("Light gray = never stopped for ≥60 s",
-                 xy=(0.98, 0.97), xycoords="axes fraction",
-                 ha="right", va="top", fontsize=9, fontstyle="italic",
-                 color="gray")
+    _style_ax(ax3, "Session Number", "Time to First\nSustained Stop (min)")
+    ax3.legend(fontsize=14, frameon=False)
     fig3.tight_layout()
     fig3.savefig(f"{output_dir}/time_to_stop.png", dpi=200)
     print("Saved: time_to_stop.png")
