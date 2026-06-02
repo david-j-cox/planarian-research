@@ -9,5 +9,6 @@ av>=14.0
 matplotlib>=3.9
 seaborn>=0.13
 tqdm>=4.66
+scikit-image>=0.24   # midline/skeleton extraction (open_dish_tracker --extract_midline)
 scikit-learn>=1.5
 
