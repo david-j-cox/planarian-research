@@ -4,13 +4,16 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
-# Data & videos (too large for git)
+# Data & videos (never push to remote)
 OpenDishWork/
 additional_videos/
 Videos.gdoc
 *.mkv
 *.mp4
 *.avi
+# All tabular/structured data and generated outputs stay local
+*.csv
+*.json
 
 # Google Drive artifacts
 *.gdoc
