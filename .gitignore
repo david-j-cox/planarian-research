@@ -22,6 +22,10 @@ Videos.gdoc
 
 # Output
 scripts_notebooks/runs/
+realtime_runs/
+*.db
+*.db-wal
+*.db-shm
 
 # OS
 .DS_Store
