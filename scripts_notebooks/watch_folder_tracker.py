@@ -48,6 +48,7 @@ import math
 import glob
 import json
 import argparse
+from collections import deque
 from datetime import datetime
 
 import cv2
@@ -63,6 +64,8 @@ from open_dish_tracker import (   # noqa: E402
     auto_detect_dish,
     auto_grid_calibration,
     detect_worm,
+    extract_midline,
+    _HAS_MIDLINE,
 )
 
 # Defaults match open_dish_tracker.py.
@@ -155,6 +158,7 @@ CSV_HEADER = [
     "video_file", "frame", "time_s",
     "centroid_x_px", "centroid_y_px", "centroid_x_mm", "centroid_y_mm",
     "area_px", "speed_px_s", "speed_mm_s", "confidence", "is_lost",
+    "body_length_mm",
 ]
 
 
@@ -238,6 +242,59 @@ class TrackState:
         self.last_t = None         # for speed: previous timestamp (session s)
         self.session_t = 0.0       # cumulative seconds across all clips
         self.global_frame = 0      # cumulative frame index
+        self.trail = deque(maxlen=90)  # recent centroids for the overlay trail
+        self.prev_midline = None   # for head/tail temporal consistency
+
+
+# Overlay colors (BGR)
+OV_CONTOUR = (0, 180, 0)
+OV_CENTROID = (0, 165, 255)   # orange centroid
+OV_TRAIL = (255, 200, 0)
+OV_DISH = (120, 120, 200)
+OV_TEXT = (255, 255, 255)
+OV_LOST = (0, 0, 255)
+OV_MIDLINE = (0, 255, 255)    # yellow body axis
+OV_HEAD = (0, 0, 255)         # red head
+OV_TAIL = (255, 0, 0)         # blue tail
+
+
+def draw_overlay(frame, calib, contour, centroid, midline, trail, lost,
+                 hud_lines):
+    """Draw detection overlay on a BGR frame copy and return it.
+
+    midline: ordered Nx2 head->tail points (or None). Drawn as the body axis
+    with a red head dot and blue tail dot so head/torso/tail motion is visible.
+    """
+    out = frame.copy()
+    c = calib["dish_center"]
+    cv2.circle(out, (int(c[0]), int(c[1])), int(calib["dish_radius_px"]),
+               OV_DISH, 2)
+    pts = [p for p in trail if p is not None]
+    for i in range(1, len(pts)):
+        cv2.line(out, pts[i - 1], pts[i], OV_TRAIL, 2, cv2.LINE_AA)
+    if contour is not None and not lost:
+        cv2.drawContours(out, [contour], -1, OV_CONTOUR, 2)
+    if midline is not None and not lost and len(midline) >= 2:
+        ml = midline.astype(np.int32)
+        for i in range(len(ml) - 1):
+            cv2.line(out, tuple(ml[i]), tuple(ml[i + 1]), OV_MIDLINE, 3,
+                     cv2.LINE_AA)
+        cv2.circle(out, tuple(ml[0]), 9, OV_HEAD, -1, cv2.LINE_AA)   # head
+        cv2.circle(out, tuple(ml[-1]), 7, OV_TAIL, -1, cv2.LINE_AA)  # tail
+    elif centroid is not None and not lost:
+        cv2.circle(out, (int(centroid[0]), int(centroid[1])), 6,
+                   OV_CENTROID, -1)
+    y = 40
+    for line in hud_lines:
+        cv2.putText(out, line, (16, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0,
+                    (0, 0, 0), 4, cv2.LINE_AA)        # black outline
+        cv2.putText(out, line, (16, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0,
+                    OV_TEXT, 2, cv2.LINE_AA)
+        y += 42
+    if lost:
+        cv2.putText(out, "LOST", (out.shape[1] - 180, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.4, OV_LOST, 3)
+    return out
 
 
 def process_clip(video_path, calib, dish_mask_bool, state, args, writer):
@@ -252,6 +309,20 @@ def process_clip(video_path, calib, dish_mask_bool, state, args, writer):
     grid_baseline = calib["grid_baseline"]
     channel = calib.get("channel", "gray")
     name = os.path.basename(video_path)
+
+    # Midline needed for the overlay's body axis or if explicitly requested.
+    want_midline = (getattr(args, "save_overlay", False)
+                    or getattr(args, "midline", False)) and _HAS_MIDLINE
+
+    # Optional overlay video writer (one per clip).
+    ov_writer = None
+    if getattr(args, "save_overlay", False):
+        w, h = calib["frame_size"]
+        ov_path = os.path.join(args.output_dir,
+                               os.path.splitext(name)[0] + "_overlay.mp4")
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out_fps = fps / max(1, args.frame_skip)
+        ov_writer = cv2.VideoWriter(ov_path, fourcc, out_fps, (w, h))
 
     n_frames = 0
     n_det = 0
@@ -276,6 +347,16 @@ def process_clip(video_path, calib, dish_mask_bool, state, args, writer):
 
         t_s = state.session_t
         lost = centroid is None
+
+        # Midline (head->tail body axis) for head/torso/tail behaviors.
+        midline = None
+        body_len_px = 0.0
+        if want_midline and not lost and contour is not None:
+            midline, _curv, body_len_px = extract_midline(
+                contour, state.prev_midline, args.midline_points, frame.shape)
+            if midline is not None:
+                state.prev_midline = midline
+
         speed_px_s = 0.0
         if not lost:
             n_det += 1
@@ -289,8 +370,10 @@ def process_clip(video_path, calib, dish_mask_bool, state, args, writer):
             state.last_centroid = centroid
             state.prev_area = area if state.prev_area is None else \
                 0.8 * state.prev_area + 0.2 * area
+            state.trail.append((int(centroid[0]), int(centroid[1])))
         else:
             state.lost_count += 1
+            state.trail.append(None)
 
         speed_mm_s = speed_px_s * mm_per_px if mm_per_px else ""
         x_mm = centroid[0] * mm_per_px if (not lost and mm_per_px) else ""
@@ -309,12 +392,33 @@ def process_clip(video_path, calib, dish_mask_bool, state, args, writer):
             round(speed_mm_s, 4) if speed_mm_s != "" else "",
             round(confidence, 4),
             int(lost),
+            round(body_len_px * mm_per_px, 4) if (body_len_px and mm_per_px)
+            else "",
         ])
+
+        if ov_writer is not None:
+            if mm_per_px and not lost:
+                pos = f"({x_mm:.1f}, {y_mm:.1f}) mm"
+                spd = f"{speed_mm_s:.2f} mm/s"
+            elif not lost:
+                pos = f"({centroid[0]:.0f}, {centroid[1]:.0f}) px"
+                spd = f"{speed_px_s:.1f} px/s"
+            else:
+                pos, spd = "--", "--"
+            hud = [f"t {state.session_t:6.1f}s   frame {state.global_frame}",
+                   f"pos {pos}", f"speed {spd}",
+                   ("LOST " + str(state.lost_count)) if lost
+                   else f"conf {confidence:.2f}"]
+            ov_writer.write(draw_overlay(frame, calib, contour, centroid,
+                                         midline, state.trail, lost, hud))
+
         state.global_frame += 1
         state.session_t += dt
         n_frames += 1
 
     cap.release()
+    if ov_writer is not None:
+        ov_writer.release()
     return n_frames, n_det
 
 
@@ -392,6 +496,21 @@ def run(args):
             serial = {k: v for k, v in calib.items() if k != "grid_baseline"}
             with open(calib_path, "w") as f:
                 json.dump(serial, f, indent=2)
+
+        # Human labels override auto dish + scale (the rig is fixed and the
+        # user clicked the true dish/grid — no reason to trust auto-detection).
+        if args.labels and os.path.exists(args.labels):
+            with open(args.labels) as f:
+                lab = json.load(f)
+            if "dish_center" in lab and "dish_radius_px" in lab:
+                calib["dish_center"] = lab["dish_center"]
+                calib["dish_radius_px"] = lab["dish_radius_px"]
+                print(f"  [labels] dish center={lab['dish_center']} "
+                      f"r={lab['dish_radius_px']:.0f}px (human)")
+            if lab.get("mm_per_px"):
+                calib["mm_per_px"] = lab["mm_per_px"]
+                print(f"  [labels] mm_per_px={lab['mm_per_px']:.6f} (human)")
+
         w, h = calib["frame_size"]
         dish_mask = circle_mask((h, w), tuple(calib["dish_center"]),
                                 calib["dish_radius_px"])
@@ -470,6 +589,19 @@ def main():
                     help="Path to a WORM-FREE clip (dish+water+grid, no worm) "
                          "to calibrate dish/grid/channel and build the "
                          "background baseline. Strongly recommended.")
+    ap.add_argument("--save_overlay", action="store_true",
+                    help="Write a *_overlay.mp4 per clip with the detection "
+                         "drawn on it (worm outline, midline head->tail axis, "
+                         "trail, dish, HUD). Slower — for piloting.")
+    ap.add_argument("--labels", default=None,
+                    help="Path to a *_labels.json from label_setup.py. Its "
+                         "human-clicked dish center/radius and mm/px override "
+                         "auto-detection (the rig is fixed).")
+    ap.add_argument("--midline", action="store_true",
+                    help="Extract the head->tail midline and log body_length_mm "
+                         "even without overlay (for head/torso/tail behaviors).")
+    ap.add_argument("--midline_points", type=int, default=20,
+                    help="Max midline sample points (default: 20).")
     ap.add_argument("--channel", choices=CHANNELS, default="auto",
                     help="Detection channel/transform. 'auto' (default) picks "
                          "the highest-contrast channel from the calibration "
