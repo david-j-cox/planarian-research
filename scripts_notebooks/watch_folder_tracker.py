@@ -249,6 +249,11 @@ class TrackState:
         self.trail = deque(maxlen=90)  # recent centroids for the overlay trail
         self.prev_midline = None   # for head/tail temporal consistency
         self.prev_gray = None      # previous frame's channel image, for motion
+        # Per-frame behavior signals, accumulated across all clips of a session
+        # and saved as <session>_signals.npz for the behavior feature extractor.
+        self.sig = {"video": [], "native_frame": [], "time_s": [],
+                    "cx_px": [], "cy_px": [], "midline": [], "body_len_px": [],
+                    "head_angle_deg": [], "lost": []}
 
 
 # Overlay colors (BGR)
@@ -315,9 +320,12 @@ def process_clip(video_path, calib, dish_mask_bool, state, args, writer):
     channel = calib.get("channel", "gray")
     name = os.path.basename(video_path)
 
-    # Midline needed for the overlay's body axis or if explicitly requested.
+    # Midline needed for the overlay's body axis, the behavior signals npz, or if
+    # explicitly requested. On by default unless --no_signals (behavior pipeline
+    # needs the per-frame midline/head-angle/body-length).
     want_midline = (getattr(args, "save_overlay", False)
-                    or getattr(args, "midline", False)) and _HAS_MIDLINE
+                    or getattr(args, "midline", False)
+                    or not getattr(args, "no_signals", False)) and _HAS_MIDLINE
 
     # Optional overlay video writer (one per clip).
     ov_writer = None
@@ -366,11 +374,17 @@ def process_clip(video_path, calib, dish_mask_bool, state, args, writer):
         # Midline (head->tail body axis) for head/torso/tail behaviors.
         midline = None
         body_len_px = 0.0
+        head_angle_deg = float("nan")
         if want_midline and not lost and contour is not None:
             midline, _curv, body_len_px = extract_midline(
                 contour, state.prev_midline, args.midline_points, frame.shape)
             if midline is not None:
                 state.prev_midline = midline
+                # Head direction: the head-end segment (pt0 -> pt1), in degrees.
+                # Wigwagging shows up as oscillation in this signal frame-to-frame.
+                if len(midline) >= 2:
+                    hv = midline[0] - midline[1]
+                    head_angle_deg = math.degrees(math.atan2(hv[1], hv[0]))
 
         speed_px_s = 0.0
         if not lost:
@@ -393,6 +407,25 @@ def process_clip(video_path, calib, dish_mask_bool, state, args, writer):
         speed_mm_s = speed_px_s * mm_per_px if mm_per_px else ""
         x_mm = centroid[0] * mm_per_px if (not lost and mm_per_px) else ""
         y_mm = centroid[1] * mm_per_px if (not lost and mm_per_px) else ""
+
+        # Accumulate per-frame behavior signals (for <session>_signals.npz).
+        if not getattr(args, "no_signals", False):
+            s = state.sig
+            s["video"].append(name)
+            s["native_frame"].append(local_idx - 1)
+            s["time_s"].append(round(t_s, 3))
+            s["cx_px"].append(centroid[0] if not lost else float("nan"))
+            s["cy_px"].append(centroid[1] if not lost else float("nan"))
+            s["body_len_px"].append(body_len_px if not lost else float("nan"))
+            s["head_angle_deg"].append(head_angle_deg)
+            s["lost"].append(int(lost))
+            # Midline padded to midline_points x 2; NaN when unavailable.
+            mp = args.midline_points
+            ml_row = np.full((mp, 2), np.nan, np.float32)
+            if midline is not None and len(midline):
+                k = min(len(midline), mp)
+                ml_row[:k] = midline[:k]
+            s["midline"].append(ml_row)
 
         writer.writerow([
             name,
@@ -585,6 +618,28 @@ def run(args):
               f"{pct:.0f}% detected, {time.monotonic()-t0:.1f}s  "
               f"(session t={state.session_t:.0f}s)")
 
+    def save_signals():
+        """Write per-frame behavior signals to <session>_signals.npz."""
+        s = state.sig
+        if getattr(args, "no_signals", False) or not s["time_s"]:
+            return
+        sig_path = os.path.join(args.output_dir, f"{session_id}_signals.npz")
+        np.savez_compressed(
+            sig_path,
+            video=np.array(s["video"]),
+            native_frame=np.array(s["native_frame"], dtype=np.int32),
+            time_s=np.array(s["time_s"], dtype=np.float32),
+            cx_px=np.array(s["cx_px"], dtype=np.float32),
+            cy_px=np.array(s["cy_px"], dtype=np.float32),
+            midline=np.array(s["midline"], dtype=np.float32),   # (N, mp, 2)
+            body_len_px=np.array(s["body_len_px"], dtype=np.float32),
+            head_angle_deg=np.array(s["head_angle_deg"], dtype=np.float32),
+            lost=np.array(s["lost"], dtype=np.int8),
+            mm_per_px=np.float32(calib["mm_per_px"] or 0.0),
+            fps=np.float32(args.fps),
+        )
+        print(f"Behavior signals: {sig_path} ({len(s['time_s'])} frames)")
+
     print(f"Watching {os.path.abspath(args.watch_dir)}")
     print(f"Rolling CSV: {csv_path}")
     print(f"Poll every {args.poll}s; settle {args.settle}s. Ctrl-C to stop.\n")
@@ -594,6 +649,7 @@ def run(args):
             handle(p)
         if args.once:
             csv_fh.close()
+            save_signals()
             print(f"Done (--once). Rolling CSV at {csv_path} "
                   f"({len(processed)} clips processed).")
             return
@@ -607,6 +663,7 @@ def run(args):
         print("\nStopped.")
     finally:
         csv_fh.close()
+        save_signals()
         print(f"Done. Rolling CSV at {csv_path} "
               f"({len(processed)} clips processed).")
 
@@ -687,6 +744,10 @@ def main():
     ap.add_argument("--no_motion", action="store_true",
                     help="Disable the frame-to-frame motion bonus that demotes "
                          "static rim/grid blobs (for A/B comparison).")
+    ap.add_argument("--no_signals", action="store_true",
+                    help="Skip per-frame behavior signals + <session>_signals.npz "
+                         "(midline/head-angle/body-length). On by default; the "
+                         "behavior pipeline needs them.")
     args = ap.parse_args()
     # Did the user pin the px area caps explicitly? If so, honor them and skip
     # the mm^2->px derivation. Otherwise fall back to the legacy px constants
