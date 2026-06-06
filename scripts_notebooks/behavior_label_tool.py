@@ -33,6 +33,8 @@ import json
 import glob
 import argparse
 
+import threading
+
 import cv2
 import numpy as np
 
@@ -131,23 +133,64 @@ def cmd_label(args):
                 bs = {b for b in r["behavior"].split(";") if b}
                 done[int(r["window_id"])] = bs
 
-    # Preload window frames (crops) so playback is smooth.
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
     crop_size = args.crop_px
 
+    # One cached VideoCapture per video, reused across windows (the manifest is
+    # sorted, so consecutive windows usually share a clip). Guarded by a lock
+    # because the prefetch thread also reads.
+    _caps = {}
+    _cap_lock = threading.Lock()
+
+    def _get_cap(video):
+        cap = _caps.get(video)
+        if cap is None:
+            cap = open_video(os.path.join(clips_dir, video))
+            _caps[video] = cap
+        return cap
+
     def load_window(wm):
-        cap = open_video(os.path.join(clips_dir, wm["video"]))
+        # Seek ONCE to the window start, then read sequentially. Re-seeking every
+        # frame (the old way) forced a keyframe decode per frame — the 10-15s lag.
         frames = []
-        for fr in range(wm["start_frame"], wm["end_frame"] + 1):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, fr)
-            ok, img = cap.read()
-            if not ok:
-                break
-            c = _crop(img, wm["cx"], wm["cy"], crop_size)
-            s = min(1.0, DISP_MAX_W / max(1, c.shape[1]))
-            frames.append(cv2.resize(c, (int(c.shape[1] * s), int(c.shape[0] * s))))
-        cap.release()
+        with _cap_lock:
+            cap = _get_cap(wm["video"])
+            cap.set(cv2.CAP_PROP_POS_FRAMES, wm["start_frame"])
+            for _ in range(wm["start_frame"], wm["end_frame"] + 1):
+                ok, img = cap.read()
+                if not ok:
+                    break
+                c = _crop(img, wm["cx"], wm["cy"], crop_size)
+                s = min(1.0, DISP_MAX_W / max(1, c.shape[1]))
+                frames.append(cv2.resize(
+                    c, (int(c.shape[1] * s), int(c.shape[0] * s))))
         return frames
+
+    # Prefetch cache: window_id -> frames, filled by a background thread so the
+    # NEXT window is decoded while you label the current one (no wait on `n`).
+    _pf = {}
+    _pf_lock = threading.Lock()
+
+    def _prefetch(idx):
+        if not (0 <= idx < len(windows)):
+            return
+        wid = windows[idx]["window_id"]
+        with _pf_lock:
+            if wid in _pf:
+                return
+        fr = load_window(windows[idx])
+        with _pf_lock:
+            _pf[wid] = fr
+
+    def get_frames(idx):
+        wid = windows[idx]["window_id"]
+        with _pf_lock:
+            fr = _pf.pop(wid, None)
+        if fr is None:
+            fr = load_window(windows[idx])
+        # kick off prefetch of the next window in the background
+        threading.Thread(target=_prefetch, args=(idx + 1,), daemon=True).start()
+        return fr
 
     i = 0
     n = len(windows)
@@ -156,7 +199,7 @@ def cmd_label(args):
     menu_h = 40 + len(LABELABLE) * 30 + 64
     while 0 <= i < n:
         wm = windows[i]
-        frames = load_window(wm)
+        frames = get_frames(i)
         if not frames:
             i += 1
             continue
@@ -211,14 +254,26 @@ def cmd_label(args):
                 if sel:
                     done[wm["window_id"]] = set(sel)
                 _save_labels(labels_path, done)
+                _release_caps(_caps, _cap_lock)
                 cv2.destroyAllWindows()
                 print(f"Saved {len(done)}/{n} labels -> {labels_path}")
                 return
         _save_labels(labels_path, done)
 
     _save_labels(labels_path, done)
+    _release_caps(_caps, _cap_lock)
     cv2.destroyAllWindows()
     print(f"Done. {len(done)}/{n} labeled -> {labels_path}")
+
+
+def _release_caps(caps, lock):
+    with lock:
+        for c in caps.values():
+            try:
+                c.release()
+            except Exception:
+                pass
+        caps.clear()
 
 
 def _save_labels(path, done):
