@@ -52,17 +52,11 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 from open_dish_tracker import open_video  # noqa: E402
+from sessions import list_session_clips  # noqa: E402
 
 VIDEO_EXTS = (".mkv", ".mp4", ".avi", ".mov")
 WIN = "Planarian Labeler"
 DISP_MAX_W = 1500   # window is scaled down to fit; clicks map back to full res
-
-
-def list_clips(d):
-    out = []
-    for ext in VIDEO_EXTS:
-        out.extend(glob.glob(os.path.join(d, f"*{ext}")))
-    return sorted(out)
 
 
 def load_existing(path):
@@ -89,11 +83,88 @@ class Frame:
     def to_full(self, dx, dy):
         return (dx / self.scale, dy / self.scale)
 
+    def click_to_full(self, x, y):
+        """Map a window click to full-res pixels, accounting for the
+        instruction bar that sits ABOVE the frame (height PANEL_H)."""
+        return self.to_full(x, y - PANEL_H)
+
 
 def read_frame(cap, idx):
     cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
     ok, f = cap.read()
     return f if ok else None
+
+
+# ── On-screen instructions ────────────────────────────────────────────
+# Everything a labeler needs is drawn on the image so the tool is
+# self-contained for people other than the author. Each stage passes its
+# title, the action to do right now, and the key legend.
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+
+def _text(img, s, org, scale, color, thick=2, shadow=True):
+    """Text with a dark outline so it reads on any background."""
+    if shadow:
+        cv2.putText(img, s, org, FONT, scale, (0, 0, 0), thick + 3, cv2.LINE_AA)
+    cv2.putText(img, s, org, FONT, scale, color, thick, cv2.LINE_AA)
+
+
+# Height of the instruction bar drawn ABOVE the video (so nothing covers the
+# dish/worm). Mouse callbacks subtract this from the click y to map back onto
+# the frame. Kept as a module constant so stages and callbacks agree.
+PANEL_H = 120
+
+
+def with_panel(disp, title, step, keys, sub=None, status=None):
+    """Return a new image: a solid instruction bar stacked ABOVE `disp`.
+
+    The video frame is left untouched and sits below the bar, so the worm and
+    dish are never covered. Returns the composited image; the caller shows it.
+    The bar is PANEL_H px tall — callbacks offset clicks by that amount.
+
+    title  - stage name, e.g. "STAGE 1 of 4 - DISH"
+    step   - the single action to do right now (big, yellow)
+    keys   - list of "key = meaning" strings shown as a legend
+    sub    - optional smaller line under `step` (context/why)
+    status - optional readout shown top-right (e.g. measured value)
+    """
+    h, w = disp.shape[:2]
+    bar = np.full((PANEL_H, w, 3), 25, np.uint8)
+    cv2.line(bar, (0, PANEL_H - 1), (w, PANEL_H - 1), (0, 220, 0), 2)
+    _text(bar, title, (16, 28), 0.7, (0, 220, 0))
+    _text(bar, step, (16, 62), 0.8, (0, 255, 255))
+    if sub:
+        _text(bar, sub, (16, 88), 0.55, (200, 200, 200), thick=1)
+    legend = "   ".join(keys)
+    _text(bar, legend, (16, PANEL_H - 12), 0.52, (255, 255, 255), thick=1)
+    if status:
+        (tw, _), _ = cv2.getTextSize(status, FONT, 0.7, 2)
+        _text(bar, status, (w - tw - 16, 34), 0.7, (0, 255, 0))
+    return np.vstack([bar, disp])
+
+
+def splash(size, title, lines, footer="Press SPACE or ENTER to continue  (Q = quit)"):
+    """Full-screen instruction card shown between stages. Returns False if quit."""
+    w, h = size
+    while True:
+        img = np.full((h, w, 3), 30, np.uint8)
+        _text(img, title, (50, 90), 1.1, (0, 255, 255), thick=2)
+        cv2.line(img, (50, 110), (w - 50, 110), (0, 220, 0), 2)
+        y = 170
+        for ln in lines:
+            big = ln.startswith("* ")
+            _text(img, ln[2:] if big else ln, (60 if big else 80, y),
+                  0.75 if big else 0.6,
+                  (255, 255, 255) if big else (200, 200, 200),
+                  thick=2 if big else 1)
+            y += 46 if big else 34
+        _text(img, footer, (50, h - 40), 0.65, (0, 255, 0))
+        cv2.imshow(WIN, img)
+        k = cv2.waitKey(20) & 0xFF
+        if k in (ord(' '), 13, 10):
+            return True
+        if k in (ord('q'), 27):
+            return False
 
 
 # ── Stage 1: dish ─────────────────────────────────────────────────────
@@ -102,26 +173,33 @@ def stage_dish(frame, labels):
 
     def on_mouse(ev, x, y, flags, _):
         if ev == cv2.EVENT_LBUTTONDOWN and len(clicks) < 2:
-            clicks.append(frame.to_full(x, y))
+            clicks.append(frame.click_to_full(x, y))
 
     cv2.setMouseCallback(WIN, on_mouse)
     print("\n[DISH] Click 1) the dish CENTER, then 2) a point on the dish EDGE."
           "  u=undo  s=save  q=quit")
+    steps = ["Click the CENTER of the dish",
+             "Now click a point on the dish EDGE (rim)",
+             "Looks right? Press S to save. Press U to redo."]
     while True:
         disp = frame.disp.copy()
         for i, (px, py) in enumerate(clicks):
             dx, dy = int(px * frame.scale), int(py * frame.scale)
-            cv2.circle(disp, (dx, dy), 5, (0, 0, 255), -1)
-            cv2.putText(disp, ["center", "edge"][i], (dx + 8, dy),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            cv2.circle(disp, (dx, dy), 6, (0, 0, 255), -1)
+            _text(disp, ["center", "edge"][i], (dx + 10, dy + 5), 0.6,
+                  (0, 0, 255))
+        status = None
         if len(clicks) == 2:
             c = clicks[0]
             r = math.dist(clicks[0], clicks[1])
             cv2.circle(disp, (int(c[0] * frame.scale), int(c[1] * frame.scale)),
                        int(r * frame.scale), (0, 255, 0), 2)
-            cv2.putText(disp, f"r={r:.0f}px  (s to save)", (20, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        cv2.imshow(WIN, disp)
+            status = f"radius = {r:.0f}px"
+        cv2.imshow(WIN, with_panel(
+            disp, "STAGE 1 of 4  -  DISH", steps[min(len(clicks), 2)],
+            ["L-click = place point", "U = undo", "S = save & next", "Q = quit"],
+            sub="Defines the arena. The tracker only looks inside this circle.",
+            status=status))
         k = cv2.waitKey(20) & 0xFF
         if k == ord('u') and clicks:
             clicks.pop()
@@ -141,16 +219,20 @@ def stage_scale(frame, labels, grid_cm):
 
     def on_mouse(ev, x, y, flags, _):
         if ev == cv2.EVENT_LBUTTONDOWN and len(clicks) < 2:
-            clicks.append(frame.to_full(x, y))
+            clicks.append(frame.click_to_full(x, y))
 
     cv2.setMouseCallback(WIN, on_mouse)
     print(f"\n[SCALE] Click two grid intersections exactly {grid_cm} cm apart "
           f"(adjacent grid corners).  u=undo  s=save  q=quit")
+    steps = [f"Click ONE grid-line corner",
+             f"Click a SECOND corner exactly {grid_cm} cm away (next one over)",
+             "Looks right? Press S to save. Press U to redo."]
     while True:
         disp = frame.disp.copy()
         for px, py in clicks:
             cv2.circle(disp, (int(px * frame.scale), int(py * frame.scale)),
-                       5, (255, 0, 255), -1)
+                       6, (255, 0, 255), -1)
+        status = None
         if len(clicks) == 2:
             cv2.line(disp,
                      tuple(int(v * frame.scale) for v in clicks[0]),
@@ -158,9 +240,12 @@ def stage_scale(frame, labels, grid_cm):
                      (255, 0, 255), 2)
             dpx = math.dist(clicks[0], clicks[1])
             mmpp = (grid_cm * 10.0) / dpx if dpx else 0
-            cv2.putText(disp, f"{dpx:.0f}px = {grid_cm}cm  ->  {mmpp:.5f} mm/px",
-                        (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
-        cv2.imshow(WIN, disp)
+            status = f"{dpx:.0f}px = {grid_cm}cm -> {mmpp:.4f} mm/px"
+        cv2.imshow(WIN, with_panel(
+            disp, "STAGE 2 of 4  -  SCALE", steps[min(len(clicks), 2)],
+            ["L-click = place point", "U = undo", "S = save & next", "Q = quit"],
+            sub=f"Two intersections {grid_cm} cm apart set the mm-per-pixel scale.",
+            status=status))
         k = cv2.waitKey(20) & 0xFF
         if k == ord('u') and clicks:
             clicks.pop()
@@ -189,11 +274,13 @@ def stage_start(clips, labels):
             f = read_frame(cap, fi) or np.zeros((400, 600, 3), np.uint8)
         fr = Frame(f)
         disp = fr.disp.copy()
-        cv2.putText(disp, f"{os.path.basename(clips[ci])}  frame {fi}/{total}",
-                    (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.putText(disp, "s = mark this as run start", (20, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        cv2.imshow(WIN, disp)
+        cv2.imshow(WIN, with_panel(
+            disp, "STAGE 3 of 4  -  RUN START",
+            "Scrub to the frame where the run begins, then press S",
+            [". / , = +10/-10 frames", "n / b = +1/-1 frame",
+             "S = mark start", "Q = quit"],
+            sub="The frame the experiment/trial actually starts on.",
+            status=f"frame {fi}/{total}"))
         k = cv2.waitKey(20) & 0xFF
         if k == ord('.'):
             fi = min(total - 1, fi + 10)
@@ -250,21 +337,24 @@ def stage_worm(clips, labels, n_worm):
 
         def on_mouse(ev, x, y, flags, _):
             if ev == cv2.EVENT_LBUTTONDOWN:
-                click["pt"] = frame.to_full(x, y)
+                click["pt"] = frame.click_to_full(x, y)
 
         cv2.setMouseCallback(WIN, on_mouse)
         while True:
             disp = frame.disp.copy()
-            cv2.putText(disp, f"{i+1}/{len(samples)}  {os.path.basename(c)} "
-                        f"f{fr}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                        (0, 255, 0), 2)
-            cv2.putText(disp, "click worm | n=skip/next | u=undo | s=save | q",
-                        (20, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+            step = ("Click the WORM, then press N for the next frame"
+                    if not click["pt"] else
+                    "Got it. Press N for next frame (or U to redo)")
             if click["pt"]:
                 px, py = click["pt"]
                 cv2.circle(disp, (int(px * frame.scale), int(py * frame.scale)),
                            7, (0, 0, 255), 2)
-            cv2.imshow(WIN, disp)
+            cv2.imshow(WIN, with_panel(
+                disp, f"STAGE 4 of 4  -  WORM   ({i+1} of {len(samples)})", step,
+                ["L-click = mark worm", "N / Space = next (skip if none)",
+                 "U = undo", "S = save & finish", "Q = quit"],
+                sub="If you can't find the worm in a frame, just press N to skip it.",
+                status=f"{len(truth)} marked"))
             k = cv2.waitKey(20) & 0xFF
             if k == ord('u'):
                 click["pt"] = None
@@ -300,7 +390,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--clips_dir", required=True, help="Folder of clips.")
-    ap.add_argument("--session", default="pilot")
+    ap.add_argument("--session", default="S1",
+                    help="Recording session to label (S1, S2, ... or 'all'). "
+                         "Clips are grouped from --clips_dir by capture-time "
+                         "gaps; only this session's clips are shown.")
     ap.add_argument("--output_dir", default="../realtime_runs")
     ap.add_argument("--stage", choices=["all", "dish", "scale", "start", "worm"],
                     default="all")
@@ -310,9 +403,11 @@ def main():
                     help="How many frames to click the worm on (default: 30).")
     args = ap.parse_args()
 
-    clips = list_clips(args.clips_dir)
+    clips = list_session_clips(args.clips_dir, args.session)
     if not clips:
-        sys.exit(f"No clips in {args.clips_dir}")
+        sys.exit(f"No clips for session {args.session} in {args.clips_dir}")
+    print(f"Session {args.session}: {len(clips)} clips "
+          f"({os.path.basename(clips[0])} … {os.path.basename(clips[-1])})")
     os.makedirs(args.output_dir, exist_ok=True)
     out = os.path.join(args.output_dir, f"{args.session}_labels.json")
     labels = load_existing(out)
@@ -328,10 +423,46 @@ def main():
     frame = Frame(rep)
 
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+    # Stage views are the frame plus the instruction bar stacked on top, so the
+    # window (and the splash cards) use that combined height.
+    dw, dh = frame.disp.shape[1], frame.disp.shape[0] + PANEL_H
+    cv2.resizeWindow(WIN, dw, dh)
+    cv2.moveWindow(WIN, 60, 60)
+
+    # Per-stage intro cards so a first-time labeler knows what each step is.
+    INTRO = {
+        "dish": ("STAGE 1 of 4 - DISH", [
+            "* Tell the tracker where the arena is.",
+            "On the picture of the dish you will:",
+            "  1. Click the CENTER of the dish.",
+            "  2. Click a point on the EDGE (rim).",
+            "A green circle shows what you defined. Press S when it fits.",
+            "Use U to undo a click, Q to quit (your progress is saved)."]),
+        "scale": (f"STAGE 2 of 4 - SCALE", [
+            "* Tell the tracker how big a pixel is in real life.",
+            f"Click two grid-line corners that are {args.grid_cm} cm apart",
+            "(one square on the grid). The tool computes mm-per-pixel.",
+            "Press S to save, U to undo."]),
+        "start": ("STAGE 3 of 4 - RUN START", [
+            "* Mark the frame where the run begins.",
+            "Scrub through the video:  . and , jump 10 frames,",
+            "n and b step 1 frame at a time.",
+            "Press S on the frame where the trial starts."]),
+        "worm": (f"STAGE 4 of 4 - WORM ({args.n_worm} frames)", [
+            "* Show the tracker where the worm really is.",
+            "You'll see sampled frames one at a time. On each:",
+            "  - click the worm, then press N for the next frame.",
+            "  - can't find it? just press N to skip that frame.",
+            "These clicks are the ground truth accuracy is measured against.",
+            "Press S any time to save and finish early."]),
+    }
 
     order = ["dish", "scale", "start", "worm"] if args.stage == "all" \
         else [args.stage]
     for st in order:
+        title, lines = INTRO[st]
+        if not splash((dw, dh), title, lines):
+            break
         if st == "dish":
             stage_dish(frame, labels); save_labels(out, labels)
         elif st == "scale":
@@ -341,6 +472,15 @@ def main():
         elif st == "worm":
             stage_worm(clips, labels, args.n_worm); save_labels(out, labels)
 
+    have = [k for k in labels if k not in ("frame_size",)]
+    splash((dw, dh), "DONE - labels saved", [
+        "* This session is labeled.",
+        f"Saved to: {os.path.basename(out)}",
+        f"Captured: {', '.join(have) if have else '(nothing)'}",
+        "",
+        "You can close this window. Tell Claude this session is labeled",
+        "and it will run the tracker + accuracy report."],
+        footer="Press any key to close.")
     cv2.destroyAllWindows()
     print(f"\nLabels written to {out}")
     print("Keys present:", ", ".join(k for k in labels if k != "frame_size"))

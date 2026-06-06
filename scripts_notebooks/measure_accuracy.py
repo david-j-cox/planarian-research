@@ -29,15 +29,39 @@ import pandas as pd
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--csv", required=True, help="Tracker *_tracks.csv")
-    ap.add_argument("--labels", required=True, help="*_labels.json with worm_truth")
+    ap.add_argument("--csv", help="Tracker *_tracks.csv "
+                    "(default: <output_dir>/<session>_tracks.csv).")
+    ap.add_argument("--labels", help="*_labels.json with worm_truth "
+                    "(default: <output_dir>/<session>_labels.json).")
+    ap.add_argument("--session", help="Session id (e.g. S2). Used to derive "
+                    "--csv/--labels paths when those aren't given.")
+    ap.add_argument("--output_dir", default="../realtime_runs",
+                    help="Where the session's _tracks.csv / _labels.json live.")
     ap.add_argument("--near_px", type=float, default=40.0,
                     help="Tracker counts as 'agreeing' if within this many px "
                          "of the human click (default: 40).")
     args = ap.parse_args()
 
+    if not args.csv:
+        if not args.session:
+            ap.error("provide --csv or --session")
+        args.csv = os.path.join(args.output_dir, f"{args.session}_tracks.csv")
+    if not args.labels:
+        if not args.session:
+            ap.error("provide --labels or --session")
+        args.labels = os.path.join(args.output_dir, f"{args.session}_labels.json")
+
     df = pd.read_csv(args.csv, skiprows=2)
-    for c in ("frame", "centroid_x_px", "centroid_y_px", "is_lost"):
+    # Labels store the per-clip frame, so match on native_frame (the index
+    # WITHIN each clip). Fall back to "frame" for older CSVs that predate the
+    # native_frame column — but warn, since "frame" is cumulative and will only
+    # match the first clip of a multi-clip session.
+    match_col = "native_frame" if "native_frame" in df.columns else "frame"
+    if match_col == "frame":
+        print("NOTE: this CSV has no native_frame column (older tracker run); "
+              "matching on cumulative frame — only the first clip will line up. "
+              "Re-run the tracker to get per-clip matching.")
+    for c in (match_col, "centroid_x_px", "centroid_y_px", "is_lost"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     with open(args.labels) as f:
         lab = json.load(f)
@@ -47,9 +71,9 @@ def main():
         print("No worm_truth in labels — run label_setup.py --stage worm first.")
         return
 
-    # Index tracker rows by (video_file, frame).
+    # Index tracker rows by (video_file, per-clip frame).
     df["video_file"] = df["video_file"].astype(str)
-    key = df.set_index(["video_file", "frame"])
+    key = df.set_index(["video_file", match_col])
 
     rows = []
     for t in truth:

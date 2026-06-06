@@ -572,6 +572,18 @@ def build_grid_baseline_median(video_path, dish_mask_bool, n_samples=30):
 # Stage 4 — Worm detection (per frame)
 # ──────────────────────────────────────────────────────────────────────
 
+# Motion-bonus tuning (used when a motion_map is supplied alongside a grid
+# baseline). A blob with motion >= MOTION_REF keeps full score; a perfectly
+# static blob is knocked down to MOTION_FLOOR. This demotes the dish rim and
+# grid intersections (static) in favour of the moving worm.
+MOTION_FLOOR = 0.25
+MOTION_REF = 0.02
+# Minimum raw score a moving GLOBAL candidate must have to break a static lock
+# (see the static-lock escape in detect_worm). Guards against jumping to faint
+# motion noise; the worm's blob scores well above this.
+STATIC_ESCAPE_MIN_SCORE = 2.0
+
+
 def detect_worm(gray, bg_max, dish_mask_bool, last_centroid,
                 min_area, max_area, roi_px, max_jump_px,
                 lost_count, prev_area=None, lost_threshold=30,
@@ -695,7 +707,20 @@ def detect_worm(gray, bg_max, dish_mask_bool, last_centroid,
             elif area_ratio < 0.1 or area_ratio > 10.0:
                 area_bonus = 0.5
 
-        score = diff_score * math.sqrt(area) * area_bonus
+        # Motion bonus: a real worm moves frame-to-frame; the dish rim and grid
+        # intersections are static, so even when they leak through the grid
+        # baseline they have ~no motion. Multiply the score by how much this blob
+        # moved (mean motion-map value), so static false blobs are demoted.
+        # Applied on top of the baseline diff so it composes with grid
+        # subtraction. Safe no-op when motion_map is None.
+        motion_bonus = 1.0
+        if motion_map is not None:
+            m = float(np.mean(motion_map[comp_bool]))
+            # Map motion in [0, ~0.1+] to a bonus in [MOTION_FLOOR, 1+]: static
+            # blobs get knocked down to the floor, moving ones keep full weight.
+            motion_bonus = MOTION_FLOOR + (1.0 - MOTION_FLOOR) * min(1.0, m / MOTION_REF)
+
+        score = diff_score * math.sqrt(area) * area_bonus * motion_bonus
         candidates.append((i, cx, cy, area, diff_score, score))
 
     if not candidates:
@@ -726,6 +751,29 @@ def detect_worm(gray, bg_max, dish_mask_bool, last_centroid,
         if roi_cands:
             roi_cands.sort(key=lambda c: c[7], reverse=True)
             best = roi_cands[0]
+
+        # Static-lock escape: proximity weighting (exp(-dist/30)) traps the
+        # tracker on the first thing it locks. On footage with strong static
+        # distractors (dish rim, grid intersections) it can park on one forever,
+        # never seeing the worm across the dish. So: if the current ROI winner
+        # is essentially STATIC (its region barely changed frame-to-frame) and a
+        # GLOBAL candidate is clearly the moving worm (strong motion + score),
+        # jump to the global one. Only motion can justify breaking proximity.
+        if best is not None and motion_map is not None:
+            best_comp = (labels == best[0])
+            best_motion = float(np.mean(motion_map[best_comp]))
+            if best_motion < MOTION_REF:           # locked blob isn't moving
+                movers = []
+                for cand in candidates:
+                    i, cx, cy, area, diff_score, score = cand
+                    cm = float(np.mean(motion_map[labels == i]))
+                    if cm >= MOTION_REF and score >= STATIC_ESCAPE_MIN_SCORE:
+                        movers.append((*cand, cm, score * cm))
+                if movers:
+                    movers.sort(key=lambda c: c[7], reverse=True)
+                    mv = movers[0]
+                    # Re-pack to the (cand..., dist, weighted_score) shape.
+                    best = (*mv[:6], math.dist((mv[1], mv[2]), (lx, ly)), mv[5])
 
     # No last_centroid at all (very first frame): pick best global candidate
     if best is None and last_centroid is None:

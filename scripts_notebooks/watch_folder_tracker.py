@@ -67,6 +67,7 @@ from open_dish_tracker import (   # noqa: E402
     extract_midline,
     _HAS_MIDLINE,
 )
+from sessions import list_session_clips  # noqa: E402
 
 # Defaults match open_dish_tracker.py.
 MIN_AREA = 80
@@ -155,11 +156,14 @@ def pick_best_channel(frames_bgr):
     return best
 
 CSV_HEADER = [
-    "video_file", "frame", "time_s",
+    "video_file", "frame", "native_frame", "time_s",
     "centroid_x_px", "centroid_y_px", "centroid_x_mm", "centroid_y_mm",
     "area_px", "speed_px_s", "speed_mm_s", "confidence", "is_lost",
     "body_length_mm",
 ]
+# "frame" is the cumulative (session-wide) index; "native_frame" is the index
+# WITHIN this clip (0-based), which is the correct key for joining to the source
+# video or to human labels (label_setup.py stores per-clip frame numbers).
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -244,6 +248,7 @@ class TrackState:
         self.global_frame = 0      # cumulative frame index
         self.trail = deque(maxlen=90)  # recent centroids for the overlay trail
         self.prev_midline = None   # for head/tail temporal consistency
+        self.prev_gray = None      # previous frame's channel image, for motion
 
 
 # Overlay colors (BGR)
@@ -338,12 +343,22 @@ def process_clip(video_path, calib, dish_mask_bool, state, args, writer):
         local_idx += 1
 
         gray = frame_to_channel(frame, channel)
+
+        # Frame-to-frame motion: |current - previous| on the channel image.
+        # The worm moves and lights this up at its body; the static dish rim and
+        # grid intersections stay dark, so the detector can demote them. None on
+        # the first frame (and harmless then — selection falls back to score).
+        motion_map = None
+        if state.prev_gray is not None and not args.no_motion:
+            motion_map = np.abs(gray - state.prev_gray)
+        state.prev_gray = gray
+
         centroid, area, contour, confidence = detect_worm(
             gray, None, dish_mask_bool, state.last_centroid,
             args.min_area, args.max_area, args.roi_px, args.max_jump_px,
             state.lost_count, prev_area=state.prev_area,
-            lost_threshold=LOST_THRESHOLD, grid_baseline=grid_baseline,
-            detect_thresh=args.detect_thresh)
+            lost_threshold=LOST_THRESHOLD, motion_map=motion_map,
+            grid_baseline=grid_baseline, detect_thresh=args.detect_thresh)
 
         t_s = state.session_t
         lost = centroid is None
@@ -382,6 +397,7 @@ def process_clip(video_path, calib, dish_mask_bool, state, args, writer):
         writer.writerow([
             name,
             state.global_frame,
+            local_idx - 1,          # native (per-clip) frame index just read
             round(t_s, 3),
             round(centroid[0], 2) if not lost else "",
             round(centroid[1], 2) if not lost else "",
@@ -450,7 +466,14 @@ def is_settled(path, settle_s):
 
 def run(args):
     os.makedirs(args.output_dir, exist_ok=True)
-    session_id = args.session_id or f"live_{datetime.now():%Y%m%d_%H%M%S}"
+    session_id = (args.session_id or args.session
+                  or f"live_{datetime.now():%Y%m%d_%H%M%S}")
+
+    # When a recording session is named, work off only that session's clips.
+    def session_videos(d):
+        if args.session:
+            return list_session_clips(d, args.session)
+        return list_videos(d)
     csv_path = os.path.join(args.output_dir, f"{session_id}_tracks.csv")
     calib_path = os.path.join(args.output_dir, f"{session_id}_calibration.json")
     done_path = os.path.join(args.output_dir, f"{session_id}_processed.txt")
@@ -511,9 +534,30 @@ def run(args):
                 calib["mm_per_px"] = lab["mm_per_px"]
                 print(f"  [labels] mm_per_px={lab['mm_per_px']:.6f} (human)")
 
+        # Resolution-aware area bounds. A planarian is a physical size (~0.5-25
+        # mm^2), but the px area depends on the rig's resolution/zoom. The old
+        # px defaults (80-3000) assumed a ~1MP frame; on the 7MP white rig the
+        # worm is 4k-24k px and was being discarded by max_area=3000. So when we
+        # know mm/px and the user didn't override the px caps, derive them from
+        # mm^2. This makes the tracker resolution-independent.
+        mmpp = calib.get("mm_per_px")
+        if mmpp and not args.area_px_explicit:
+            px_per_mm2 = 1.0 / (mmpp ** 2)
+            args.min_area = int(args.min_area_mm2 * px_per_mm2)
+            args.max_area = int(args.max_area_mm2 * px_per_mm2)
+            print(f"  area bounds from scale: {args.min_area_mm2}-"
+                  f"{args.max_area_mm2} mm^2 -> {args.min_area}-{args.max_area} px")
+
         w, h = calib["frame_size"]
+        # Shrink the mask inward so the bright dish RIM and the grid lines that
+        # ride along it are excluded — on white footage the rim is a strong dark
+        # ring that the detector otherwise locks onto instead of the worm.
+        eff_radius = calib["dish_radius_px"] * (1.0 - args.dish_margin)
+        if args.dish_margin:
+            print(f"  dish mask shrunk {args.dish_margin*100:.0f}% "
+                  f"({calib['dish_radius_px']:.0f} -> {eff_radius:.0f}px) to drop the rim")
         dish_mask = circle_mask((h, w), tuple(calib["dish_center"]),
-                                calib["dish_radius_px"])
+                                eff_radius)
         dish_mask_bool = dish_mask > 0
         if new_csv:
             writer.writerow([f"# mm_per_px={calib['mm_per_px'] or ''}"])
@@ -546,12 +590,17 @@ def run(args):
     print(f"Poll every {args.poll}s; settle {args.settle}s. Ctrl-C to stop.\n")
 
     if args.process_existing:
-        for p in list_videos(args.watch_dir):
+        for p in session_videos(args.watch_dir):
             handle(p)
+        if args.once:
+            csv_fh.close()
+            print(f"Done (--once). Rolling CSV at {csv_path} "
+                  f"({len(processed)} clips processed).")
+            return
 
     try:
         while True:
-            for p in list_videos(args.watch_dir):
+            for p in session_videos(args.watch_dir):
                 handle(p)
             time.sleep(args.poll)
     except KeyboardInterrupt:
@@ -571,9 +620,18 @@ def main():
     ap.add_argument("--output_dir", default="../realtime_runs",
                     help="Where the rolling CSV + calibration go (default: ../realtime_runs).")
     ap.add_argument("--session_id", default=None,
-                    help="Session name (default: live_<timestamp>).")
+                    help="Session name (default: the --session id, e.g. 'S2', "
+                         "else live_<timestamp>).")
+    ap.add_argument("--session", default=None,
+                    help="Restrict to one recording session (S1, S2, ... or "
+                         "'all'). Clips in --watch_dir are grouped by capture-"
+                         "time gaps; only this session's clips are processed.")
     ap.add_argument("--process_existing", action="store_true",
                     help="Process clips already in the folder before watching.")
+    ap.add_argument("--once", action="store_true",
+                    help="With --process_existing, exit after the existing "
+                         "clips are done instead of watching for new ones "
+                         "(use for offline batch runs over recorded sessions).")
     ap.add_argument("--poll", type=float, default=5.0,
                     help="Seconds between folder scans (default: 5).")
     ap.add_argument("--settle", type=float, default=2.0,
@@ -606,12 +664,38 @@ def main():
                     help="Detection channel/transform. 'auto' (default) picks "
                          "the highest-contrast channel from the calibration "
                          "frames — robust to the rig's color cast.")
-    ap.add_argument("--min_area", type=int, default=MIN_AREA)
-    ap.add_argument("--max_area", type=int, default=MAX_AREA)
+    ap.add_argument("--min_area", type=int, default=None,
+                    help="Min blob area in PIXELS. Overrides --min_area_mm2. "
+                         "Default: derived from mm/px (see --min_area_mm2).")
+    ap.add_argument("--max_area", type=int, default=None,
+                    help="Max blob area in PIXELS. Overrides --max_area_mm2.")
+    ap.add_argument("--min_area_mm2", type=float, default=0.5,
+                    help="Min worm area in mm^2 (default 0.5). Converted to px "
+                         "via the calibration scale so the tracker is "
+                         "resolution-independent.")
+    ap.add_argument("--max_area_mm2", type=float, default=30.0,
+                    help="Max worm area in mm^2 (default 30). A planarian is a "
+                         "few mm^2; the generous cap allows shadow/stretch.")
     ap.add_argument("--roi_px", type=int, default=ROI_PX)
     ap.add_argument("--max_jump_px", type=float, default=MAX_JUMP_PX)
     ap.add_argument("--detect_thresh", type=float, default=DETECT_THRESH)
+    ap.add_argument("--dish_margin", type=float, default=0.0,
+                    help="Fraction of the dish radius to exclude at the rim "
+                         "(default 0 = full dish). Testing showed the rim is not "
+                         "the main false-positive source on the white rig; the "
+                         "motion bonus handles rim/grid blobs instead.")
+    ap.add_argument("--no_motion", action="store_true",
+                    help="Disable the frame-to-frame motion bonus that demotes "
+                         "static rim/grid blobs (for A/B comparison).")
     args = ap.parse_args()
+    # Did the user pin the px area caps explicitly? If so, honor them and skip
+    # the mm^2->px derivation. Otherwise fall back to the legacy px constants
+    # for runs with no calibration scale.
+    args.area_px_explicit = (args.min_area is not None or args.max_area is not None)
+    if args.min_area is None:
+        args.min_area = MIN_AREA
+    if args.max_area is None:
+        args.max_area = MAX_AREA
     run(args)
 
 

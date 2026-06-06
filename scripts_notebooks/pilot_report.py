@@ -102,8 +102,8 @@ def main():
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
     # 1) detection rate per clip
-    per = df.groupby("video_file").apply(
-        lambda d: 100 * (d["is_lost"] == 0).mean())
+    per = df.groupby("video_file")["is_lost"].apply(
+        lambda s: 100 * (s == 0).mean())
     axes[0, 0].bar(range(len(per)), per.values, color="0.3")
     axes[0, 0].axhline(100, color="green", ls="--", lw=0.8)
     axes[0, 0].set_title("Detection rate per clip (%)")
@@ -111,24 +111,38 @@ def main():
     axes[0, 0].set_ylabel("% detected")
     axes[0, 0].set_ylim(0, 105)
 
+    def _empty(ax, title):
+        ax.text(0.5, 0.5, "no detections", ha="center", va="center",
+                transform=ax.transAxes, color="0.5")
+        ax.set_title(title)
+
     # 2) trajectory
-    axes[0, 1].plot(g[xcol], g[ycol], lw=0.6, color="0.2")
-    axes[0, 1].scatter(g[xcol].iloc[0], g[ycol].iloc[0], c="green", s=40, label="start")
-    axes[0, 1].scatter(g[xcol].iloc[-1], g[ycol].iloc[-1], c="red", s=40, label="end")
-    axes[0, 1].set_title(f"Worm trajectory ({unit})")
-    axes[0, 1].set_aspect("equal", "datalim")
-    axes[0, 1].invert_yaxis()
-    axes[0, 1].legend(fontsize=8)
+    if len(g):
+        axes[0, 1].plot(g[xcol], g[ycol], lw=0.6, color="0.2")
+        axes[0, 1].scatter(g[xcol].iloc[0], g[ycol].iloc[0], c="green", s=40, label="start")
+        axes[0, 1].scatter(g[xcol].iloc[-1], g[ycol].iloc[-1], c="red", s=40, label="end")
+        axes[0, 1].set_title(f"Worm trajectory ({unit})")
+        axes[0, 1].set_aspect("equal", "datalim")
+        axes[0, 1].invert_yaxis()
+        axes[0, 1].legend(fontsize=8)
+    else:
+        _empty(axes[0, 1], f"Worm trajectory ({unit})")
 
     # 3) speed over time
-    axes[1, 0].plot(g["time_s"] / 60, g[scol], lw=0.5, color="0.3")
+    if len(g):
+        axes[1, 0].plot(g["time_s"] / 60, g[scol], lw=0.5, color="0.3")
+    else:
+        _empty(axes[1, 0], f"Speed over time ({unit}/s)")
     axes[1, 0].set_title(f"Speed over time ({unit}/s)")
     axes[1, 0].set_xlabel("time (min)")
     axes[1, 0].set_ylabel(f"speed ({unit}/s)")
 
     # 4) cumulative distance
-    cum = np.nancumsum(np.sqrt(g[xcol].diff()**2 + g[ycol].diff()**2))
-    axes[1, 1].plot(g["time_s"] / 60, cum, color="0.2")
+    if len(g):
+        cum = np.nancumsum(np.sqrt(g[xcol].diff()**2 + g[ycol].diff()**2))
+        axes[1, 1].plot(g["time_s"] / 60, cum, color="0.2")
+    else:
+        _empty(axes[1, 1], f"Cumulative distance ({unit})")
     axes[1, 1].set_title(f"Cumulative distance ({unit})")
     axes[1, 1].set_xlabel("time (min)")
     axes[1, 1].set_ylabel(f"distance ({unit})")
