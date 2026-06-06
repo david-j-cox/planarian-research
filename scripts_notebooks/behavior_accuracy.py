@@ -16,7 +16,6 @@ import os
 import csv
 import json
 import argparse
-from collections import defaultdict, Counter
 
 
 def main():
@@ -28,49 +27,49 @@ def main():
     md = args.manifest_dir
     with open(os.path.join(md, "predictions_hidden.json")) as f:
         pred = {h["window_id"]: h["rule_pred"] for h in json.load(f)}
+    # human labels are now SETS (';'-joined). The rule predicts ONE behavior per
+    # window, so its "set" is a singleton. Scoring is per-behavior present/absent.
     human = {}
     lp = os.path.join(md, "human_labels.csv")
     if not os.path.exists(lp):
         raise SystemExit(f"No human labels yet at {lp} — run the `label` GUI first.")
     with open(lp) as f:
         for r in csv.DictReader(f):
-            human[int(r["window_id"])] = r["behavior"]
+            human[int(r["window_id"])] = {b for b in r["behavior"].split(";") if b}
 
-    pairs = [(human[w], pred[w]) for w in sorted(human) if w in pred]
-    if not pairs:
+    wids = [w for w in sorted(human) if w in pred]
+    if not wids:
         raise SystemExit("No overlapping labeled+predicted windows.")
-    n = len(pairs)
-    correct = sum(1 for h, p in pairs if h == p)
+    n = len(wids)
+    behaviors = sorted({b for w in wids for b in human[w]} |
+                       {pred[w] for w in wids})
 
-    labels = sorted(set([h for h, _ in pairs] + [p for _, p in pairs]))
-    conf = defaultdict(Counter)            # conf[human][pred]
-    for h, p in pairs:
-        conf[h][p] += 1
+    # Exact-set agreement (rule's single label == human's set) is strict but
+    # informative; per-behavior present/absent is the main metric.
+    exact = sum(1 for w in wids if human[w] == {pred[w]})
+    # "Rule label is among the human's behaviors" — the rule got *a* right one.
+    among = sum(1 for w in wids if pred[w] in human[w])
 
-    print("=" * 64)
-    print("BEHAVIOR RULE-CLASSIFIER ACCURACY vs BLIND HUMAN LABELS")
-    print("=" * 64)
-    print(f"Labeled windows compared: {n}")
-    print(f"Overall agreement:        {correct}/{n} ({100*correct/n:.0f}%)")
+    print("=" * 70)
+    print("BEHAVIOR RULE-CLASSIFIER ACCURACY vs BLIND HUMAN LABELS (multi-label)")
+    print("=" * 70)
+    print(f"Labeled windows compared:        {n}")
+    print(f"Rule label present in human set: {among}/{n} ({100*among/n:.0f}%)")
+    print(f"Exact set match:                 {exact}/{n} ({100*exact/n:.0f}%)")
     print()
-    print(f"{'behavior':12s} {'n':>4} {'precision':>10} {'recall':>8}")
-    for b in labels:
-        tp = conf[b][b]
-        human_n = sum(conf[b].values())                 # actually labeled b
-        pred_n = sum(conf[h][b] for h in labels)         # predicted b
+    print("Per-behavior (present/absent across windows):")
+    print(f"  {'behavior':12s} {'human_n':>7} {'precision':>10} {'recall':>8}")
+    for b in behaviors:
+        tp = sum(1 for w in wids if pred[w] == b and b in human[w])
+        pred_n = sum(1 for w in wids if pred[w] == b)
+        human_n = sum(1 for w in wids if b in human[w])
         prec = tp / pred_n if pred_n else float("nan")
         rec = tp / human_n if human_n else float("nan")
-        print(f"{b:12s} {human_n:>4} {prec:>10.2f} {rec:>8.2f}")
-
-    print("\nConfusion matrix (rows = human, cols = rule pred):")
-    hdr = "human\\pred  " + " ".join(f"{b[:6]:>7}" for b in labels)
-    print(hdr)
-    for h in labels:
-        row = " ".join(f"{conf[h][p]:>7}" for p in labels)
-        print(f"{h:11s} {row}")
-    print("=" * 64)
-    print("Use this to decide which behaviors need a trained model (low recall/"
-          "precision) vs which the rules already handle.")
+        print(f"  {b:12s} {human_n:>7} {prec:>10.2f} {rec:>8.2f}")
+    print("=" * 70)
+    print("recall = of windows humans saw behavior B, how often the rule said B.")
+    print("precision = of windows the rule said B, how often a human agreed.")
+    print("Low values flag behaviors that need a trained model (task #13).")
 
 
 if __name__ == "__main__":

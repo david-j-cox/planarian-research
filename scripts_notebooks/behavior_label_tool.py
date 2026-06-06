@@ -122,11 +122,14 @@ def cmd_label(args):
     clips_dir = args.clips_dir or man["clips_dir"]
     labels_path = os.path.join(md, "human_labels.csv")
 
+    # done[window_id] = set(behaviors). Backward compatible: old single-label
+    # rows (one behavior string) load as a one-element set.
     done = {}
     if os.path.exists(labels_path):
         with open(labels_path) as f:
             for r in csv.DictReader(f):
-                done[int(r["window_id"])] = r["behavior"]
+                bs = {b for b in r["behavior"].split(";") if b}
+                done[int(r["window_id"])] = bs
 
     # Preload window frames (crops) so playback is smooth.
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
@@ -148,58 +151,65 @@ def cmd_label(args):
 
     i = 0
     n = len(windows)
+    # Bottom panel sized to fit the title + one-behavior-per-line menu + footer,
+    # so nothing is ever clipped regardless of crop size.
+    menu_h = 40 + len(LABELABLE) * 30 + 64
     while 0 <= i < n:
         wm = windows[i]
         frames = load_window(wm)
         if not frames:
             i += 1
             continue
-        sel = done.get(wm["window_id"], "")
+        sel = set(done.get(wm["window_id"], set()))
         fi = 0
         while True:
             base = frames[fi % len(frames)].copy()
             fi += 1
-            panel = np.full((base.shape[0] + 200, max(base.shape[1], 360), 3),
-                            25, np.uint8)
+            pw = max(base.shape[1], 420)
+            panel = np.full((base.shape[0] + menu_h, pw, 3), 25, np.uint8)
             panel[:base.shape[0], :base.shape[1]] = base
-            y0 = base.shape[0]
-            _put(panel, f"window {i+1}/{n}   [{len(done)} labeled]", (12, y0 + 24),
-                 0.6, (0, 220, 0))
-            _put(panel, "Pick the DOMINANT behavior (blind):", (12, y0 + 50),
-                 0.55, (255, 255, 255))
+            y = base.shape[0] + 26
+            _put(panel, f"window {i+1}/{n}   [{len(done)} done]   "
+                 f"TOGGLE behaviors (multi):", (12, y), 0.55, (0, 220, 0))
+            y += 30
             for k, b in enumerate(LABELABLE):
-                col = (0, 255, 255) if sel == b else (200, 200, 200)
-                _put(panel, f"{k+1}. {b}", (12 + (k % 4) * 170,
-                     y0 + 78 + (k // 4) * 26), 0.55, col)
-            _put(panel, ("SELECTED: " + sel) if sel else "SELECTED: (none)",
-                 (12, y0 + 160), 0.6,
+                on = b in sel
+                mark = "[x]" if on else "[ ]"
+                col = (0, 255, 255) if on else (190, 190, 190)
+                _put(panel, f"{k+1}  {mark} {b}", (16, y), 0.6, col)
+                y += 30
+            y += 8
+            cur = " + ".join(sorted(sel)) if sel else "(none)"
+            _put(panel, "SELECTED: " + cur, (12, y), 0.6,
                  (0, 255, 0) if sel else (0, 0, 255))
-            _put(panel, "R replay  n/SPACE next  b back  u clear  q save+quit",
-                 (12, y0 + 186), 0.5, (180, 180, 180))
+            y += 28
+            _put(panel, "1-7 toggle   n/SPACE next   b back   u clear   q save+quit",
+                 (12, y), 0.5, (180, 180, 180))
             cv2.imshow(WIN, panel)
             k = cv2.waitKey(40) & 0xFF
             if ord('1') <= k <= ord('9'):
                 j = k - ord('1')
                 if j < len(LABELABLE):
-                    sel = LABELABLE[j]
+                    b = LABELABLE[j]
+                    sel.discard(b) if b in sel else sel.add(b)   # toggle
             elif k == ord('u'):
-                sel = ""
+                sel = set()
             elif k == ord('r'):
                 fi = 0
             elif k == ord('b'):
                 if sel:
-                    done[wm["window_id"]] = sel
+                    done[wm["window_id"]] = set(sel)
                 i = max(0, i - 1)
                 break
             elif k in (ord('n'), ord(' ')):
                 if not sel:
-                    continue  # must label before advancing
-                done[wm["window_id"]] = sel
+                    continue  # must select >=1 before advancing
+                done[wm["window_id"]] = set(sel)
                 i += 1
                 break
             elif k in (ord('q'), 27):
                 if sel:
-                    done[wm["window_id"]] = sel
+                    done[wm["window_id"]] = set(sel)
                 _save_labels(labels_path, done)
                 cv2.destroyAllWindows()
                 print(f"Saved {len(done)}/{n} labels -> {labels_path}")
@@ -214,9 +224,9 @@ def cmd_label(args):
 def _save_labels(path, done):
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["window_id", "behavior"])
+        w.writerow(["window_id", "behavior"])      # behavior = ';'-joined set
         for wid in sorted(done):
-            w.writerow([wid, done[wid]])
+            w.writerow([wid, ";".join(sorted(done[wid]))])
 
 
 def _put(img, s, org, scale, color):
