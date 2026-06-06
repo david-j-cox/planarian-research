@@ -86,16 +86,25 @@ def main():
         dy = g[ycol].diff()
         step = np.sqrt(dx**2 + dy**2)
         total_dist = float(np.nansum(step))
+        # Speed stats exclude frames flagged by filter_jumps (impossible steps):
+        # filter_jumps NaNs their speed_mm_s, so dropna() already drops them.
         sp = g[scol].dropna()
-        moving = (g[scol] > STOP_SPEED_MM_S).mean() * 100 if has_mm else float("nan")
+        n_flagged = int((df.get("speed_flag", "") == "impossible_step").sum()) \
+            if "speed_flag" in df.columns else 0
         print(f"\nMOVEMENT ({unit}):")
         print(f"  Total distance:  {total_dist:.1f} {unit}"
               + (f"  ({total_dist/10:.1f} cm)" if has_mm else ""))
         print(f"  Mean speed:      {sp.mean():.3f} {unit}/s")
         print(f"  Median speed:    {sp.median():.3f} {unit}/s")
-        print(f"  Max speed:       {sp.max():.3f} {unit}/s")
-        if has_mm:
-            print(f"  % time moving:   {moving:.0f}%  (>{STOP_SPEED_MM_S} mm/s)")
+        print(f"  Max speed:       {sp.max():.3f} {unit}/s"
+              + ("" if n_flagged == 0 else
+                 f"   ({n_flagged} impossible-step frames excluded)"))
+        if has_mm and len(sp):
+            # One threshold is misleading for a slow continuous glider, so report
+            # the moving-fraction across a few cutoffs.
+            print("  % time moving:")
+            for thr in (0.05, 0.1, 0.2, 0.5):
+                print(f"      >{thr:>4} mm/s: {100*(sp > thr).mean():.0f}%")
     print("=" * 64)
 
     # ---- Plots ----

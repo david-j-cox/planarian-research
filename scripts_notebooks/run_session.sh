@@ -51,11 +51,17 @@ echo "==== [1/3] TRACK $SESSION (human labels override auto-detect, channel=$CHA
   --process_existing --once
 
 echo
-echo "==== [2/3] ACCURACY vs human ground truth ===="
+echo "==== [2/4] ACCURACY vs human ground truth ===="
 "$PY" measure_accuracy.py --session "$SESSION" --output_dir "$OUT_DIR"
 
 echo
-echo "==== [3/3] REPORT figures ===="
+echo "==== [3/4] FLAG impossible-speed steps (>${MAX_SPEED_MM_S:-7} mm/s) ===="
+# Positions are trusted; this only NaNs untrustworthy per-frame speeds so the
+# movement stats aren't poisoned by capture-stutter velocity spikes.
+"$PY" filter_jumps.py "$CSV" ${MAX_SPEED_MM_S:+--max_speed_mm_s "$MAX_SPEED_MM_S"}
+
+echo
+echo "==== [4/4] REPORT figures ===="
 "$PY" pilot_report.py --csv "$CSV"
 
 echo
