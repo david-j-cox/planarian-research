@@ -3,16 +3,21 @@
 filter_jumps.py — Flag physically-impossible instantaneous speeds in a tracks CSV.
 
 The watch-folder tracker localizes the worm well (validated ~0.5 mm vs human
-ground truth), and the per-frame POSITIONS are trustworthy. But the worm rests
-for long stretches then repositions quickly, and at 30 fps a real reposition can
-land in a single frame as an impossibly high instantaneous speed (e.g. 64 mm/s,
-even 1000+ mm/s). Those spikes corrupt speed and %-time-moving statistics.
+ground truth). The per-frame POSITIONS are generally trustworthy, but some
+frames show a physically-impossible instantaneous speed: small fast steps
+(~tens of mm/s, a few mm in one frame) and occasional large excursions (1000+
+mm/s, the centroid briefly grabbing something far away then returning). Either
+way the per-frame VELOCITY at that frame is not trustworthy and corrupts speed
+and %-time-moving statistics.
 
-Investigation (S3) showed these are NOT false latches: blob area (~17000 px) and
-confidence (1.0) are unchanged across the step, and frame timing is steady 30 fps.
-The worm really is at A then at B; only the per-frame VELOCITY across the step is
-untrustworthy. So we do NOT move positions or reject detections — we flag the
-offending speed values so speed/movement stats can exclude them.
+Investigation (S3) showed the common moderate steps are NOT false latches: blob
+area (~17000 px) and confidence (1.0) are unchanged across the step, and frame
+timing is steady 30 fps — the worm really is at A then at B. (The worm also sits
+genuinely still for long stretches — bit-identical centroids during rest are
+correct tracking, not a glitch, and are left alone.) Rather than guess which
+spikes are real-but-fast vs mis-localizations, we keep every position and only
+flag the offending SPEED value, so speed/movement stats can exclude it without
+altering the trajectory.
 
 Planarian gliding is ~1.5-2 mm/s (range ~1-5; Rompolas 2010, Talbot & Schotz
 2011, Sabry 2022 review). Scrunching escape is faster but unquantified. Default
