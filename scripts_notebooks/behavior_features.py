@@ -42,6 +42,10 @@ import argparse
 import numpy as np
 
 MAX_SPEED_MM_S = 7.0   # cap instantaneous speed (matches filter_jumps; see that file)
+# Oscillation gating: a swing must exceed these to count as a real reversal,
+# rejecting the sub-threshold jitter a near-flat resting signal produces.
+HEAD_MIN_SWING_DEG = 8.0       # head must swing >8 deg to count a wigwag reversal
+BODYLEN_MIN_SWING_FRAC = 0.05  # body length must change >5% to count a length cycle
 
 
 def load_signals(npz_path):
@@ -52,6 +56,38 @@ def load_signals(npz_path):
 def _angdiff(a, b):
     """Smallest signed difference a-b in degrees, wrapped to [-180,180]."""
     return (a - b + 180.0) % 360.0 - 180.0
+
+
+def _gated_oscillations(x, min_amp):
+    """Count true oscillation half-cycles in 1-D series `x`, ignoring jitter.
+
+    Walks the series tracking the running extremum; a reversal is only counted
+    once the signal has swung at least `min_amp` from the last confirmed
+    extremum (hysteresis). This rejects the sub-threshold sign-flipping that a
+    near-flat noisy signal produces — a RESTING worm's tiny head/length jitter
+    no longer reads as oscillation. Returns (n_reversals, peak_to_peak_amp).
+    """
+    x = np.asarray(x, dtype=np.float64)
+    x = x[~np.isnan(x)]
+    if len(x) < 3:
+        return 0, 0.0
+    n_rev = 0
+    direction = 0           # +1 rising, -1 falling, 0 unknown
+    last_ext = x[0]
+    lo = hi = x[0]
+    for v in x[1:]:
+        lo = min(lo, v); hi = max(hi, v)
+        if direction >= 0 and v <= last_ext - min_amp:
+            if direction == 1:
+                n_rev += 1
+            direction = -1; last_ext = v
+        elif direction <= 0 and v >= last_ext + min_amp:
+            if direction == -1:
+                n_rev += 1
+            direction = 1; last_ext = v
+        elif (direction >= 0 and v > last_ext) or (direction <= 0 and v < last_ext):
+            last_ext = v
+    return n_rev, float(hi - lo)
 
 
 def compute_features(sig, window_s=1.0):
@@ -115,10 +151,12 @@ def compute_features(sig, window_s=1.0):
             hw = head[det]
             hw = hw[~np.isnan(hw)]
             if len(hw) >= 3:
-                # detrend via successive signed angular differences
-                dh = _angdiff(hw[1:], hw[:-1])
-                feats["head_osc_deg"][i] = float(np.std(dh))
-                feats["head_reversals"][i] = int(np.sum(np.diff(np.sign(dh)) != 0))
+                # Unwrap the circular angle to a continuous series, then count
+                # amplitude-gated reversals so resting jitter doesn't register.
+                unw = hw[0] + np.concatenate([[0.0], np.cumsum(_angdiff(hw[1:], hw[:-1]))])
+                rev, pp = _gated_oscillations(unw, HEAD_MIN_SWING_DEG)
+                feats["head_osc_deg"][i] = pp                 # peak-to-peak swing
+                feats["head_reversals"][i] = rev
 
             # --- body-length dynamics (peristalsis / scrunch) ---
             bw = blen[det]
@@ -127,8 +165,9 @@ def compute_features(sig, window_s=1.0):
                 mean_b = np.mean(bw)
                 feats["bodylen_cv"][i] = float(np.std(bw) / mean_b) if mean_b else 0.0
                 feats["bodylen_contract"][i] = float((np.max(bw)-np.min(bw))/np.max(bw))
-                db = np.diff(bw)
-                feats["bodylen_cycles"][i] = int(np.sum(np.diff(np.sign(db)) != 0)) / 2.0
+                # Gate length cycles on a fraction of mean length (jitter reject).
+                rev, _ = _gated_oscillations(bw, BODYLEN_MIN_SWING_FRAC * mean_b)
+                feats["bodylen_cycles"][i] = rev / 2.0        # half-cycles -> cycles
 
             # --- heading change (turning) ---
             hd = heading[det]
