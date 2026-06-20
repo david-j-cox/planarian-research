@@ -34,6 +34,7 @@ import glob
 import argparse
 
 import threading
+import time as _time
 
 import cv2
 import numpy as np
@@ -94,6 +95,7 @@ def cmd_sample(args):
 
     with open(os.path.join(args.out_dir, "manifest.json"), "w") as f:
         json.dump({"window_s": args.window_s, "clips_dir": args.clips_dir,
+                   "fps": fps,
                    "windows": manifest}, f, indent=2)
     with open(os.path.join(args.out_dir, "predictions_hidden.json"), "w") as f:
         json.dump(hidden, f, indent=2)
@@ -122,6 +124,7 @@ def cmd_label(args):
         man = json.load(f)
     windows = man["windows"]
     clips_dir = args.clips_dir or man["clips_dir"]
+    fps = float(man.get("fps", 30.0))
     labels_path = os.path.join(md, "human_labels.csv")
 
     # done[window_id] = set(behaviors). Backward compatible: old single-label
@@ -204,41 +207,58 @@ def cmd_label(args):
             i += 1
             continue
         sel = set(done.get(wm["window_id"], set()))
-        fi = 0
-        while True:
-            base = frames[fi % len(frames)].copy()
-            fi += 1
-            pw = max(base.shape[1], 420)
-            panel = np.full((base.shape[0] + menu_h, pw, 3), 25, np.uint8)
-            panel[:base.shape[0], :base.shape[1]] = base
-            y = base.shape[0] + 26
-            _put(panel, f"window {i+1}/{n}   [{len(done)} done]   "
+        bh, bw_ = frames[0].shape[:2]
+        pw = max(bw_, 420)
+        # Pre-render each video frame onto a full-size canvas ONCE (the costly
+        # crop/resize is already done in load_window; this just blits). The menu
+        # strip is rebuilt only when `sel` changes, not every frame — that
+        # per-frame text drawing was what made playback choppy.
+        canvases = []
+        for f_img in frames:
+            cvs = np.full((bh + menu_h, pw, 3), 25, np.uint8)
+            cvs[:bh, :f_img.shape[1]] = f_img
+            canvases.append(cvs)
+
+        def menu_strip():
+            strip = np.full((menu_h, pw, 3), 25, np.uint8)
+            y = 26
+            _put(strip, f"window {i+1}/{n}   [{len(done)} done]   "
                  f"TOGGLE behaviors (multi):", (12, y), 0.55, (0, 220, 0))
             y += 30
             for k, b in enumerate(LABELABLE):
                 on = b in sel
-                mark = "[x]" if on else "[ ]"
                 col = (0, 255, 255) if on else (190, 190, 190)
-                _put(panel, f"{k+1}  {mark} {b}", (16, y), 0.6, col)
+                _put(strip, f"{k+1}  {'[x]' if on else '[ ]'} {b}", (16, y), 0.6, col)
                 y += 30
             y += 8
             cur = " + ".join(sorted(sel)) if sel else "(none)"
-            _put(panel, "SELECTED: " + cur, (12, y), 0.6,
+            _put(strip, "SELECTED: " + cur, (12, y), 0.6,
                  (0, 255, 0) if sel else (0, 0, 255))
             y += 28
-            _put(panel, "1-7 toggle   n/SPACE next   b back   u clear   q save+quit",
+            _put(strip, "1-7 toggle   n/SPACE next   b back   u clear   q save+quit",
                  (12, y), 0.5, (180, 180, 180))
-            cv2.imshow(WIN, panel)
-            k = cv2.waitKey(40) & 0xFF
+            return strip
+
+        strip = menu_strip()
+        t0 = _time.monotonic()
+        nframes = len(canvases)
+        while True:
+            # Wall-clock playback at the real capture fps -> smooth 3s loop.
+            fi = int(((_time.monotonic() - t0) * fps)) % nframes
+            disp = canvases[fi].copy()
+            disp[bh:, :] = strip
+            cv2.imshow(WIN, disp)
+            k = cv2.waitKey(15) & 0xFF
             if ord('1') <= k <= ord('9'):
                 j = k - ord('1')
                 if j < len(LABELABLE):
                     b = LABELABLE[j]
                     sel.discard(b) if b in sel else sel.add(b)   # toggle
+                    strip = menu_strip()
             elif k == ord('u'):
-                sel = set()
+                sel = set(); strip = menu_strip()
             elif k == ord('r'):
-                fi = 0
+                t0 = _time.monotonic()
             elif k == ord('b'):
                 if sel:
                     done[wm["window_id"]] = set(sel)
