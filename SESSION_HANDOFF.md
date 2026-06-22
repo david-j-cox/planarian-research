@@ -61,12 +61,26 @@ box center is a noisier position proxy than a blob centroid). Hampel didn't
 catch them (sub-threshold / not isolated). Revisit by gating on physical worm
 speed if it matters downstream.
 
-## IMMEDIATE next step (resume here): behavior-model integration
-Wire yolo_tracker's per-frame output (position + head/tail/body-len + state)
-into the behavior model (Stage C, `behavior_classifier.py`, RandomForest
-macro-F1 0.67). Reconcile the feature set the classifier expects against what
-yolo_tracker emits in its CSV. See also `behavior_rules` (rule-based v1) and
-the blind-labeling tools for behavior GT.
+## Behavior-model integration — DONE (2026-06-22), unvalidated on this rig
+- `yolo_to_signals.py` (new) runs yolo_tracker over clips and writes the
+  `<session>_signals.npz` schema that `behavior_features` / `behavior_rules` /
+  the trained classifier consume. The behavior model now runs unchanged on the
+  YOLO-primary localizer. End-to-end verified on 2026-06-02_16-00-37 (1890
+  frames, 0 lost): features compute, rule + S3-trained classifiers both run.
+- Morphology upgraded from a straight PCA axis to a CURVED head->tail midline:
+  `box_morphology` skeletonizes the box-constrained worm contour via
+  `open_dish_tracker.extract_midline` (which also keeps head/tail identity
+  stable across frames; straight-axis PCA kept only as fallback). This
+  decouples head oscillation from body heading -- `head_osc_deg` 12.4->28.9,
+  `head_reversals` p90 0->3 (was flat zero). The rule classifier then surfaces
+  all 7 behaviors (wig_wag 1.1%->26.4%, reversing 0%->7.5%) vs only 5 before.
+
+### Open item (the real gap): NO white-7MP behavior labels
+Both classifiers run but neither is validated on this rig. The S3-trained
+classifier is out-of-distribution here (labels 83% gliding vs the rule's
+37% after the midline upgrade) -- same cross-rig shift as the localizer. To
+trust behavior output on white-7MP: blind-label behavior on the tracked clips,
+then validate/retrain. This is the recommended next step.
 
 ## Then (priority order)
 1. **Cross-rig generalization**: the white-7MP model is rig-specific (eval
