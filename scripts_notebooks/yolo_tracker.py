@@ -121,6 +121,87 @@ def box_morphology(frame, bg, box, pos, prev_midline, pad=0.35, n_points=MIDLINE
     return np.asarray([head, tail], np.float32), head, tail, float(proj.max() - proj.min())
 
 
+def _thirds(ml):
+    """Head-third and tail-third centroids of an ordered midline."""
+    k = max(1, len(ml) // 3)
+    return ml[:k].mean(0), ml[-k:].mean(0)
+
+
+def orient_midlines(mids, cx, cy, fps, mm_per_px, alpha=0.25,
+                    move_thresh_mm_s=0.3, vsmooth=5):
+    """Orient every midline so midline[0] is the biological HEAD, robustly.
+
+    Two stages, chosen because the worm is mostly stationary (~85% of frames
+    move < 0.3 mm/s) yet still has one true head:
+
+    1. STABILITY by EMA chaining. Keep pt0 on one physical end by third-centroid
+       match to an EXPONENTIAL MOVING AVERAGE of recent head/tail positions, not
+       to the raw previous frame. A lone bad frame barely moves the EMA, so it
+       cannot flip the label for the rest of the clip (the failure mode of
+       previous-frame chaining).
+
+    2. SENSE by global velocity vote. Planaria lead with the head when they
+       translate, so we sum speed-weighted votes over the whole clip for whether
+       the (now stable) pt0 end leads the motion, and reverse the whole clip once
+       if the tail end wins. A GLOBAL vote is robust to brief reversal/scrunch
+       bouts (the worm momentarily moving tail-first) -- those are the minority
+       and would mislead a per-frame velocity rule. Residual flips are rare
+       hard body-folds; they are reported, not hidden.
+
+    Returns (oriented_mids, n_flip_events): residual frame-to-frame head-end
+    swaps, the quantity we drive toward 0.
+    """
+    n = len(mids)
+    cx = np.asarray(cx, float); cy = np.asarray(cy, float)
+
+    def _sm(a, w):
+        if w <= 1:
+            return a
+        return np.convolve(np.nan_to_num(a), np.ones(w) / w, mode="same")
+    vx = np.gradient(_sm(cx, vsmooth)); vy = np.gradient(_sm(cy, vsmooth))
+    spd = np.hypot(vx, vy) * fps * mm_per_px
+
+    # Stage 1: EMA-chained stable orientation (pt0 held on one physical end).
+    oriented = [None] * n
+    ema_h = ema_t = None
+    for i in range(n):
+        ml = mids[i]
+        if ml is None or len(ml) < 3:
+            continue
+        h, t = _thirds(ml)
+        if ema_h is not None:
+            keep_d = np.linalg.norm(h - ema_h) + np.linalg.norm(t - ema_t)
+            flip_d = np.linalg.norm(h - ema_t) + np.linalg.norm(t - ema_h)
+            if flip_d < keep_d:
+                ml = ml[::-1].copy(); h, t = t, h
+        oriented[i] = ml
+        ema_h = h if ema_h is None else (1 - alpha) * ema_h + alpha * h
+        ema_t = t if ema_t is None else (1 - alpha) * ema_t + alpha * t
+
+    # Stage 2: global head sense from speed-weighted velocity votes.
+    vote = 0.0
+    for i in range(n):
+        ml = oriented[i]
+        if ml is None or spd[i] < move_thresh_mm_s:
+            continue
+        c = np.array([cx[i], cy[i]]); v = np.array([vx[i], vy[i]])
+        h, t = _thirds(ml)
+        vote += spd[i] * np.sign((h - c) @ v - (t - c) @ v)
+    if vote < 0:                       # pt0 trails motion on average -> it's tail
+        oriented = [ml[::-1].copy() if ml is not None else None for ml in oriented]
+
+    # Residual flip events (rare hard body-folds), reported for transparency.
+    flips, prev_h = 0, None
+    for ml in oriented:
+        if ml is None:
+            continue
+        h = ml[0]
+        if prev_h is not None and np.linalg.norm(h - prev_h) > np.linalg.norm(ml[-1] - prev_h):
+            flips += 1
+        prev_h = h
+    return oriented, flips
+
+
 def track(video, model, mm_per_px, conf=0.10, imgsz=1024, device="mps", min_area=200):
     bg, dish, fps = ft.build_background(video)
     if bg is None:
@@ -150,6 +231,16 @@ def track(video, model, mm_per_px, conf=0.10, imgsz=1024, device="mps", min_area
 
     xs = np.array([r["cx"] for r in raw]); ys = np.array([r["cy"] for r in raw])
     cx, cy, keep = ft.hampel_clean(xs, ys, fps, mm_per_px)
+
+    # Global head/tail orientation from velocity (replaces fragile chaining).
+    oriented, nflip = orient_midlines([r["midline"] for r in raw], cx, cy, fps, mm_per_px)
+    for i, r in enumerate(raw):
+        ml = oriented[i]
+        r["midline"] = ml
+        if ml is not None:
+            r["head"] = ml[0].tolist(); r["tail"] = ml[-1].tolist()
+    if nflip:
+        print(f"  head/tail orientation: {nflip} residual flip events")
 
     recs, last_ml, last_h, last_t = [], None, None, None
     for i, r in enumerate(raw):
