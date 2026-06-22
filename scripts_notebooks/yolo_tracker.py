@@ -134,19 +134,23 @@ def orient_midlines(mids, cx, cy, fps, mm_per_px, alpha=0.25,
     Two stages, chosen because the worm is mostly stationary (~85% of frames
     move < 0.3 mm/s) yet still has one true head:
 
-    1. STABILITY by EMA chaining. Keep pt0 on one physical end by third-centroid
-       match to an EXPONENTIAL MOVING AVERAGE of recent head/tail positions, not
-       to the raw previous frame. A lone bad frame barely moves the EMA, so it
-       cannot flip the label for the rest of the clip (the failure mode of
-       previous-frame chaining).
+    1. STABILITY by CENTROID-RELATIVE EMA chaining. Keep pt0 on one physical end
+       by matching each frame's head/tail OFFSET FROM THE WORM CENTROID (not its
+       absolute pixel position) to an exponential moving average of recent
+       offsets. This is translation-invariant, so the box-center position jumps
+       (the known jitter -- up to ~30 mm/s, far above the worm's ~7 mm/s max)
+       cannot break the reference: the head stays "up-left of center" regardless
+       of where the box leaps. Only a real, gradual body rotation moves the
+       offset, which the EMA tracks. (Absolute-position matching flipped here:
+       on a jump the reference sat far from both new endpoints and the alignment
+       became a coin-flip.)
 
-    2. SENSE by global velocity vote. Planaria lead with the head when they
-       translate, so we sum speed-weighted votes over the whole clip for whether
-       the (now stable) pt0 end leads the motion, and reverse the whole clip once
-       if the tail end wins. A GLOBAL vote is robust to brief reversal/scrunch
-       bouts (the worm momentarily moving tail-first) -- those are the minority
-       and would mislead a per-frame velocity rule. Residual flips are rare
-       hard body-folds; they are reported, not hidden.
+    2. SENSE by global velocity vote, gated to PHYSICAL speeds. Planaria lead
+       with the head when translating, so we sum speed-weighted votes over the
+       clip for whether pt0 leads the motion, and reverse the whole clip once if
+       the tail wins. Frames with non-physical speed (> MAX_SPEED_MM_S, i.e.
+       jitter jumps) are excluded so a spurious leap cannot dominate the vote.
+       A global vote is also robust to brief tail-first reversal/scrunch bouts.
 
     Returns (oriented_mids, n_flip_events): residual frame-to-frame head-end
     swaps, the quantity we drive toward 0.
@@ -161,28 +165,31 @@ def orient_midlines(mids, cx, cy, fps, mm_per_px, alpha=0.25,
     vx = np.gradient(_sm(cx, vsmooth)); vy = np.gradient(_sm(cy, vsmooth))
     spd = np.hypot(vx, vy) * fps * mm_per_px
 
-    # Stage 1: EMA-chained stable orientation (pt0 held on one physical end).
+    # Stage 1: centroid-relative EMA-chained orientation (jump-invariant).
     oriented = [None] * n
-    ema_h = ema_t = None
+    ema_rh = ema_rt = None
     for i in range(n):
         ml = mids[i]
         if ml is None or len(ml) < 3:
             continue
+        c = np.array([cx[i], cy[i]])
         h, t = _thirds(ml)
-        if ema_h is not None:
-            keep_d = np.linalg.norm(h - ema_h) + np.linalg.norm(t - ema_t)
-            flip_d = np.linalg.norm(h - ema_t) + np.linalg.norm(t - ema_h)
+        rh, rt = h - c, t - c               # offsets from the worm centroid
+        if ema_rh is not None:
+            keep_d = np.linalg.norm(rh - ema_rh) + np.linalg.norm(rt - ema_rt)
+            flip_d = np.linalg.norm(rh - ema_rt) + np.linalg.norm(rt - ema_rh)
             if flip_d < keep_d:
-                ml = ml[::-1].copy(); h, t = t, h
+                ml = ml[::-1].copy(); rh, rt = rt, rh
         oriented[i] = ml
-        ema_h = h if ema_h is None else (1 - alpha) * ema_h + alpha * h
-        ema_t = t if ema_t is None else (1 - alpha) * ema_t + alpha * t
+        ema_rh = rh if ema_rh is None else (1 - alpha) * ema_rh + alpha * rh
+        ema_rt = rt if ema_rt is None else (1 - alpha) * ema_rt + alpha * rt
 
-    # Stage 2: global head sense from speed-weighted velocity votes.
+    # Stage 2: global head sense from speed-weighted velocity votes (physical
+    # speeds only -- jitter jumps above MAX_SPEED_MM_S are not real travel).
     vote = 0.0
     for i in range(n):
         ml = oriented[i]
-        if ml is None or spd[i] < move_thresh_mm_s:
+        if ml is None or spd[i] < move_thresh_mm_s or spd[i] > ft.MAX_SPEED_MM_S:
             continue
         c = np.array([cx[i], cy[i]]); v = np.array([vx[i], vy[i]])
         h, t = _thirds(ml)
@@ -190,15 +197,20 @@ def orient_midlines(mids, cx, cy, fps, mm_per_px, alpha=0.25,
     if vote < 0:                       # pt0 trails motion on average -> it's tail
         oriented = [ml[::-1].copy() if ml is not None else None for ml in oriented]
 
-    # Residual flip events (rare hard body-folds), reported for transparency.
-    flips, prev_h = 0, None
+    # Residual head-direction reversals: frames where the head-end segment angle
+    # swings > 150 deg vs the previous present frame -- physically impossible for
+    # a real head (it cannot teleport across the body in 1/30 s), so each one is
+    # a genuine orientation error. Position-jump invariant (uses the head-segment
+    # ANGLE, not endpoint pixel distance), unlike the earlier crude metric.
+    flips, prev_ang = 0, None
     for ml in oriented:
         if ml is None:
             continue
-        h = ml[0]
-        if prev_h is not None and np.linalg.norm(h - prev_h) > np.linalg.norm(ml[-1] - prev_h):
+        hv = ml[0] - ml[1]
+        ang = np.degrees(np.arctan2(hv[1], hv[0]))
+        if prev_ang is not None and abs((ang - prev_ang + 180) % 360 - 180) > 150:
             flips += 1
-        prev_h = h
+        prev_ang = ang
     return oriented, flips
 
 
