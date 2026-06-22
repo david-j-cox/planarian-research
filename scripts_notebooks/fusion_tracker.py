@@ -98,6 +98,44 @@ def pca_axis(contour):
         float(proj.max() - proj.min())
 
 
+# ── shared temporal cleanup ───────────────────────────────────────────
+def hampel_clean(xs, ys, fps, mm_per_px, win=7):
+    """Safe temporal pass shared by the trackers: flag points farther from
+    their local median (window `win`) than a worm could travel at MAX_SPEED
+    (Hampel spike rejection), then interpolate the rejected/missing points and
+    lightly median-smooth. It only repairs the tail -- it never 'locks on', so
+    it cannot drag the track onto debris. Returns (cx, cy, keep) where keep
+    marks frames whose raw detection was trusted (others are interpolated)."""
+    n = len(xs)
+    valid = np.isfinite(xs)
+    idx = np.arange(n)
+    floor_px = max(MAX_SPEED_MM_S / fps / mm_per_px * 5.0, 40.0)
+    flagged = np.zeros(n, bool)
+    for i in range(n):
+        if not valid[i]:
+            continue
+        lo, hi = max(0, i - win), min(n, i + win + 1)
+        m = valid[lo:hi]
+        if m.sum() < 3:
+            continue
+        mx, my = np.median(xs[lo:hi][m]), np.median(ys[lo:hi][m])
+        if np.hypot(xs[i] - mx, ys[i] - my) > floor_px:
+            flagged[i] = True
+    keep = valid & ~flagged
+    if keep.any():
+        cx = np.interp(idx, idx[keep], xs[keep])
+        cy = np.interp(idx, idx[keep], ys[keep])
+
+        def medsmooth(a, w=3):
+            pad = w // 2
+            ap = np.pad(a, pad, mode="edge")
+            return np.array([np.median(ap[i:i + w]) for i in range(len(a))])
+        cx, cy = medsmooth(cx), medsmooth(cy)
+    else:
+        cx, cy = xs, ys
+    return cx, cy, keep
+
+
 # ── tracker ──────────────────────────────────────────────────────────
 def track(video, mm_per_px, min_area=200):
     """Per-frame largest-blob-in-dish (the robust cue), then a SAFE temporal
@@ -126,37 +164,7 @@ def track(video, mm_per_px, min_area=200):
 
     n = len(raw)
     xs = np.array([r["cx"] for r in raw]); ys = np.array([r["cy"] for r in raw])
-    valid = np.isfinite(xs)
-    idx = np.arange(n)
-    # Hampel: flag points far from their local median (window 7). A worm moves
-    # <= MAX_SPEED, so a point that sits well off the local trajectory is a
-    # wrong-blob spike, not real motion.
-    win = 7
-    floor_px = max(MAX_SPEED_MM_S / fps / mm_per_px * 5.0, 40.0)
-    flagged = np.zeros(n, bool)
-    for i in range(n):
-        if not valid[i]:
-            continue
-        lo, hi = max(0, i - win), min(n, i + win + 1)
-        m = valid[lo:hi]
-        if m.sum() < 3:
-            continue
-        mx, my = np.median(xs[lo:hi][m]), np.median(ys[lo:hi][m])
-        if np.hypot(xs[i] - mx, ys[i] - my) > floor_px:
-            flagged[i] = True
-    keep = valid & ~flagged
-
-    if keep.any():
-        cx = np.interp(idx, idx[keep], xs[keep])
-        cy = np.interp(idx, idx[keep], ys[keep])
-
-        def medsmooth(a, w=3):
-            pad = w // 2
-            ap = np.pad(a, pad, mode="edge")
-            return np.array([np.median(ap[i:i + w]) for i in range(len(a))])
-        cx, cy = medsmooth(cx), medsmooth(cy)
-    else:
-        cx, cy = xs, ys
+    cx, cy, keep = hampel_clean(xs, ys, fps, mm_per_px)
 
     # Rebuild records: cleaned position; carry head/tail from the last kept frame.
     recs = []
