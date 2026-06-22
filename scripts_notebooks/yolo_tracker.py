@@ -28,7 +28,7 @@ import numpy as np
 import cv2
 from ultralytics import YOLO
 
-import fusion_tracker as ft   # build_background, candidate_blobs, pca_axis, hampel_clean
+import fusion_tracker as ft   # build_background, hampel_clean
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_MODEL = os.path.join(HERE, "runs", "pose", "worm_white7mp_n", "weights", "best.pt")
@@ -56,17 +56,35 @@ def yolo_box_in_dish(result, dish, margin=1.10):
     return best
 
 
-def nearest_blob_axis(frame, bg, dish, pos, max_dist_px, min_area=200):
-    """Morphology from the bg-sub contour nearest the YOLO position (within
-    max_dist_px). Returns (head, tail, blen) or (None, None, nan) if none."""
-    cands = ft.candidate_blobs(frame, bg, dish, min_area)
-    if not cands:
+def box_axis(frame, bg, box, pos, pad=0.35):
+    """Body axis (head/tail/length) from the bg-sub foreground INSIDE the YOLO
+    box (expanded by `pad`). Constraining to the box excludes the dish rim/
+    meniscus -- which otherwise merges with an edge worm and sends the PCA axis
+    arcing across the dish -- and caps body length to the box size. The axis
+    direction is PCA on those worm pixels; head/tail are anchored THROUGH the
+    YOLO position so the line always runs through the detected worm center.
+    Returns (head, tail, blen_px) or (None, None, nan)."""
+    H, W = frame.shape[:2]
+    x0, y0, x1, y1 = box
+    bw, bh = x1 - x0, y1 - y0
+    rx0, ry0 = max(0, int(x0 - pad * bw)), max(0, int(y0 - pad * bh))
+    rx1, ry1 = min(W, int(x1 + pad * bw)), min(H, int(y1 + pad * bh))
+    if rx1 - rx0 < 3 or ry1 - ry0 < 3:
         return None, None, np.nan
-    px, py = pos
-    c = min(cands, key=lambda c: np.hypot(c[0] - px, c[1] - py))
-    if np.hypot(c[0] - px, c[1] - py) > max_dist_px:
+    diff = cv2.cvtColor(cv2.absdiff(frame[ry0:ry1, rx0:rx1], bg[ry0:ry1, rx0:rx1]),
+                        cv2.COLOR_BGR2GRAY)
+    th = cv2.threshold(diff, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    th = cv2.morphologyEx(th, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    ys, xs = np.where(th > 0)
+    if len(xs) < 5:
         return None, None, np.nan
-    return ft.pca_axis(c[4])
+    pts = np.column_stack([xs + rx0, ys + ry0]).astype(np.float32)   # full-frame (x,y)
+    d = pts - pts.mean(0)
+    axis = np.linalg.eigh((d.T @ d) / len(d))[1][:, -1]
+    proj = (pts - np.asarray(pos, np.float32)) @ axis               # relative to YOLO center
+    head = (np.asarray(pos) + axis * proj.max()).tolist()
+    tail = (np.asarray(pos) + axis * proj.min()).tolist()
+    return head, tail, float(proj.max() - proj.min())
 
 
 def track(video, model, mm_per_px, conf=0.10, imgsz=1024, device="mps", min_area=200):
@@ -75,8 +93,6 @@ def track(video, model, mm_per_px, conf=0.10, imgsz=1024, device="mps", min_area
         return [], fps, dish
     if isinstance(model, str):
         model = YOLO(model)
-    # morphology search radius: a worm body or so around the YOLO center
-    max_dist_px = max(dish[2] * 0.08, 120.0)
     cap = cv2.VideoCapture(video)
     raw = []
     while True:
@@ -87,7 +103,7 @@ def track(video, model, mm_per_px, conf=0.10, imgsz=1024, device="mps", min_area
         det = yolo_box_in_dish(r, dish)
         if det is not None:
             bx, by, box, cf = det
-            h, t, blen = nearest_blob_axis(frame, bg, dish, (bx, by), max_dist_px, min_area)
+            h, t, blen = box_axis(frame, bg, box, (bx, by))
             raw.append({"cx": bx, "cy": by, "box": box, "conf": cf,
                         "head": h, "tail": t, "blen": blen})
         else:
@@ -187,8 +203,12 @@ def cmd_track(a):
     if a.overlay:
         cap = cv2.VideoCapture(a.video)
         W = int(cap.get(3)); H = int(cap.get(4))
+        # Downscale for smooth playback: full-res 3360x2100 frames stutter in
+        # most players. Draw at full res, then resize the written frame.
+        s = a.overlay_scale
+        sW, sH = int(W * s), int(H * s)
         vw = cv2.VideoWriter(os.path.join(a.out, f"{stem}_yolo.mp4"),
-                             cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
+                             cv2.VideoWriter_fourcc(*"mp4v"), fps, (sW, sH))
         i = 0
         while True:
             ok, im = cap.read()
@@ -202,9 +222,9 @@ def cmd_track(a):
                 if r["head"]:
                     cv2.line(im, (int(r["head"][0]), int(r["head"][1])),
                              (int(r["tail"][0]), int(r["tail"][1])), (0, 255, 0), 3)
-            vw.write(im); i += 1
+            vw.write(cv2.resize(im, (sW, sH)) if s != 1.0 else im); i += 1
         cap.release(); vw.release()
-        print(f"  wrote overlay {stem}_yolo.mp4")
+        print(f"  wrote overlay {stem}_yolo.mp4  ({sW}x{sH})")
 
 
 def main():
@@ -219,6 +239,8 @@ def main():
     t.add_argument("--device", default="mps")
     t.add_argument("--out", default=os.path.join(HERE, "..", "realtime_runs", "yolo_out"))
     t.add_argument("--overlay", action="store_true")
+    t.add_argument("--overlay_scale", type=float, default=0.4,
+                   help="downscale factor for the overlay mp4 (1.0 = full res)")
     t.set_defaults(func=cmd_track)
     e = sub.add_parser("eval")
     e.add_argument("--model", default=DEFAULT_MODEL)
