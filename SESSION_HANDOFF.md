@@ -59,7 +59,9 @@ green head/tail axis stays on the worm at the dish edge. Overlay in
 single-frame position jumps (mostly box-center wobble as the worm bends; the
 box center is a noisier position proxy than a blob centroid). Hampel didn't
 catch them (sub-threshold / not isolated). Revisit by gating on physical worm
-speed if it matters downstream.
+speed if it matters downstream. NOTE: these jumps no longer corrupt head/tail
+identity (orientation is now centroid-relative, jump-invariant) -- they only
+wobble the position dot.
 
 ## Behavior-model integration — DONE (2026-06-22), unvalidated on this rig
 - `yolo_to_signals.py` (new) runs yolo_tracker over clips and writes the
@@ -69,11 +71,17 @@ speed if it matters downstream.
   frames, 0 lost): features compute, rule + S3-trained classifiers both run.
 - Morphology upgraded from a straight PCA axis to a CURVED head->tail midline:
   `box_morphology` skeletonizes the box-constrained worm contour via
-  `open_dish_tracker.extract_midline` (which also keeps head/tail identity
-  stable across frames; straight-axis PCA kept only as fallback). This
-  decouples head oscillation from body heading -- `head_osc_deg` 12.4->28.9,
+  `open_dish_tracker.extract_midline` (straight-axis PCA kept only as fallback).
+  This decouples head oscillation from body heading -- `head_osc_deg` 12.4->28.9,
   `head_reversals` p90 0->3 (was flat zero). The rule classifier then surfaces
   all 7 behaviors (wig_wag 1.1%->26.4%, reversing 0%->7.5%) vs only 5 before.
+- Head/tail ORIENTATION made robust (`orient_midlines`): centroid-relative EMA
+  chaining for stability + a physical-speed-gated global velocity vote to name
+  the head (planaria lead with the head when gliding). The two 180-deg head
+  flips first seen in the overlay were NOT body folds -- they sat on box-center
+  position jumps (~30 mm/s, worm max ~7), where an absolute-position reference
+  degenerates. Centroid-relative matching is jump-invariant; residual head
+  reversals 2->0 on the validated clip. Confirmed visually 2026-06-22.
 
 ### Open item (the real gap): NO white-7MP behavior labels
 Both classifiers run but neither is validated on this rig. The S3-trained
