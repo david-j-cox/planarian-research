@@ -41,29 +41,40 @@ Settled this session:
 
 ## Current best tracker: `scripts_notebooks/yolo_tracker.py`
 - Position from `runs/pose/worm_white7mp_n/weights/best.pt` (dish gate ×1.10).
-- Morphology (head/tail/body-len via PCA) from the bg-sub contour nearest the
-  YOLO box; position never depends on bg-sub.
+- Morphology (head/tail/body-len via PCA) from the bg-sub foreground INSIDE the
+  YOLO box (`box_axis`, box expanded 0.35×), anchored THROUGH the YOLO
+  position. This excludes the dish rim (which used to make the axis arc across
+  the dish on edge worms) and caps body length to the box. Position never
+  depends on bg-sub.
 - Shared `fusion_tracker.hampel_clean` temporal pass (spike reject + interp/
   hold + smooth) fills no-detection frames and jitter.
 - `python yolo_tracker.py eval` (windowed, ~20 min) | `... track --video ... --overlay`
+  (overlay is downscaled 0.4× for smooth playback; --overlay_scale to change).
 
-## IMMEDIATE next step (resume here)
-Run the full-video deployment path end-to-end and eyeball it:
-```
-cd scripts_notebooks
-../venv/bin/python yolo_tracker.py track --video ../live_capture/2026-06-02_16-00-37.mkv --overlay
-```
-Confirm the per-frame CSV + overlay look right (position locked on the worm,
-head/tail sensible, `interp` only on true gaps). Note runtime: per-frame YOLO
-at imgsz 1024 on MPS is ~3 fps → ~10 min per ~1900-frame clip.
+## Validated end-to-end (2026-06-22)
+Full-video track on 2026-06-02_16-00-37 (1890 frames): 100% detection, 0
+interp; body-length tight [5.06, 9.03]mm (median 7.87), present every frame;
+green head/tail axis stays on the worm at the dish edge. Overlay in
+`realtime_runs/yolo_out/`. KNOWN open item: ~1.2% of frames show 2–6mm
+single-frame position jumps (mostly box-center wobble as the worm bends; the
+box center is a noisier position proxy than a blob centroid). Hampel didn't
+catch them (sub-threshold / not isolated). Revisit by gating on physical worm
+speed if it matters downstream.
+
+## IMMEDIATE next step (resume here): behavior-model integration
+Wire yolo_tracker's per-frame output (position + head/tail/body-len + state)
+into the behavior model (Stage C, `behavior_classifier.py`, RandomForest
+macro-F1 0.67). Reconcile the feature set the classifier expects against what
+yolo_tracker emits in its CSV. See also `behavior_rules` (rule-based v1) and
+the blind-labeling tools for behavior GT.
 
 ## Then (priority order)
-1. **Cross-rig generalization** (handoff's original #2): the white-7MP model is
-   rig-specific (eval frames are other frames from the same 15 videos). For
-   blue/amber rigs, train on bg-subtracted / dish-cropped (lighting-invariant)
-   inputs, or add labels from other rigs. This is the path to ONE model.
-2. **Behavior model integration** (Stage C, RandomForest macro-F1 0.67): feed
-   it yolo_tracker's position + morphology; reconcile features.
+1. **Cross-rig generalization**: the white-7MP model is rig-specific (eval
+   frames are other frames from the same 15 videos). For blue/amber rigs, train
+   on bg-subtracted / dish-cropped (lighting-invariant) inputs, or add labels
+   from other rigs. This is the path to ONE model.
+2. Position jitter: optional Hampel/speed-gate tightening for the ~1.2% jump
+   frames noted above.
 3. Speed: if real-time needed, export to CoreML/ONNX or lower imgsz; current
    ~3 fps is fine for offline analysis only.
 4. Confirm `mm_per_px` (used S3's 0.02657) for the 16:xx rig geometry. Pixel
