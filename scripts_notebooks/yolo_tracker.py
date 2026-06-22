@@ -29,9 +29,11 @@ import cv2
 from ultralytics import YOLO
 
 import fusion_tracker as ft   # build_background, hampel_clean
+from open_dish_tracker import extract_midline   # curved head->tail midline
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_MODEL = os.path.join(HERE, "runs", "pose", "worm_white7mp_n", "weights", "best.pt")
+MIDLINE_POINTS = 20   # max ordered points along the body curve
 
 
 def yolo_box_in_dish(result, dish, margin=1.10):
@@ -56,35 +58,67 @@ def yolo_box_in_dish(result, dish, margin=1.10):
     return best
 
 
-def box_axis(frame, bg, box, pos, pad=0.35):
-    """Body axis (head/tail/length) from the bg-sub foreground INSIDE the YOLO
-    box (expanded by `pad`). Constraining to the box excludes the dish rim/
-    meniscus -- which otherwise merges with an edge worm and sends the PCA axis
-    arcing across the dish -- and caps body length to the box size. The axis
-    direction is PCA on those worm pixels; head/tail are anchored THROUGH the
-    YOLO position so the line always runs through the detected worm center.
-    Returns (head, tail, blen_px) or (None, None, nan)."""
+def _box_foreground(frame, bg, box, pad):
+    """bg-sub foreground (binary) and its full-frame pixel coords INSIDE the YOLO
+    box expanded by `pad`. Constraining to the box excludes the dish rim/meniscus
+    -- which otherwise merges with an edge worm -- and caps morphology to the box.
+    Returns (th_roi, (rx0, ry0)) or (None, None)."""
     H, W = frame.shape[:2]
     x0, y0, x1, y1 = box
     bw, bh = x1 - x0, y1 - y0
     rx0, ry0 = max(0, int(x0 - pad * bw)), max(0, int(y0 - pad * bh))
     rx1, ry1 = min(W, int(x1 + pad * bw)), min(H, int(y1 + pad * bh))
     if rx1 - rx0 < 3 or ry1 - ry0 < 3:
-        return None, None, np.nan
+        return None, None
     diff = cv2.cvtColor(cv2.absdiff(frame[ry0:ry1, rx0:rx1], bg[ry0:ry1, rx0:rx1]),
                         cv2.COLOR_BGR2GRAY)
     th = cv2.threshold(diff, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
     th = cv2.morphologyEx(th, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    return th, (rx0, ry0)
+
+
+def box_morphology(frame, bg, box, pos, prev_midline, pad=0.35, n_points=MIDLINE_POINTS):
+    """Body morphology from the bg-sub foreground INSIDE the YOLO box.
+
+    Preferred path: skeletonize the worm's largest contour into an ordered,
+    curved head->tail midline (open_dish_tracker.extract_midline), which makes
+    the head-end direction independent of the overall body heading -- so the
+    head-oscillation (wigwag) features are real signal, not a copy of the turning
+    feature. extract_midline also keeps head/tail identity stable across frames
+    via prev_midline (third-centroid alignment), so no separate sign-fix is
+    needed downstream.
+
+    Fallback (skeleton too short / fails): a straight PCA axis anchored THROUGH
+    the YOLO position, same as before -- always yields a head/tail so the track
+    never has a hole. Returns (midline_pts, head, tail, blen_px); midline_pts is
+    an ordered (k,2) array (>=2 rows) or None only when there is no foreground.
+    """
+    th, origin = _box_foreground(frame, bg, box, pad)
+    if th is None:
+        return None, None, None, np.nan
+    rx0, ry0 = origin
+    cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not cnts:
+        return None, None, None, np.nan
+    cnt = max(cnts, key=cv2.contourArea) + np.array([rx0, ry0])   # -> full-frame
+
+    midline, _curv, blen = extract_midline(cnt, prev_midline, n_points, frame.shape)
+    if midline is not None and len(midline) >= 3:
+        head = midline[0].tolist()
+        tail = midline[-1].tolist()
+        return np.asarray(midline, np.float32), head, tail, float(blen)
+
+    # Fallback: straight PCA axis through the YOLO position.
     ys, xs = np.where(th > 0)
     if len(xs) < 5:
-        return None, None, np.nan
-    pts = np.column_stack([xs + rx0, ys + ry0]).astype(np.float32)   # full-frame (x,y)
+        return None, None, None, np.nan
+    pts = np.column_stack([xs + rx0, ys + ry0]).astype(np.float32)
     d = pts - pts.mean(0)
     axis = np.linalg.eigh((d.T @ d) / len(d))[1][:, -1]
-    proj = (pts - np.asarray(pos, np.float32)) @ axis               # relative to YOLO center
+    proj = (pts - np.asarray(pos, np.float32)) @ axis
     head = (np.asarray(pos) + axis * proj.max()).tolist()
     tail = (np.asarray(pos) + axis * proj.min()).tolist()
-    return head, tail, float(proj.max() - proj.min())
+    return np.asarray([head, tail], np.float32), head, tail, float(proj.max() - proj.min())
 
 
 def track(video, model, mm_per_px, conf=0.10, imgsz=1024, device="mps", min_area=200):
@@ -95,6 +129,7 @@ def track(video, model, mm_per_px, conf=0.10, imgsz=1024, device="mps", min_area
         model = YOLO(model)
     cap = cv2.VideoCapture(video)
     raw = []
+    prev_midline = None
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -103,27 +138,29 @@ def track(video, model, mm_per_px, conf=0.10, imgsz=1024, device="mps", min_area
         det = yolo_box_in_dish(r, dish)
         if det is not None:
             bx, by, box, cf = det
-            h, t, blen = box_axis(frame, bg, box, (bx, by))
+            ml, h, t, blen = box_morphology(frame, bg, box, (bx, by), prev_midline)
+            if ml is not None and len(ml) >= 3:
+                prev_midline = ml   # only the curved midline seeds H/T consistency
             raw.append({"cx": bx, "cy": by, "box": box, "conf": cf,
-                        "head": h, "tail": t, "blen": blen})
+                        "midline": ml, "head": h, "tail": t, "blen": blen})
         else:
             raw.append({"cx": np.nan, "cy": np.nan, "box": None, "conf": 0.0,
-                        "head": None, "tail": None, "blen": np.nan})
+                        "midline": None, "head": None, "tail": None, "blen": np.nan})
     cap.release()
 
     xs = np.array([r["cx"] for r in raw]); ys = np.array([r["cy"] for r in raw])
     cx, cy, keep = ft.hampel_clean(xs, ys, fps, mm_per_px)
 
-    recs, last_h, last_t = [], None, None
+    recs, last_ml, last_h, last_t = [], None, None, None
     for i, r in enumerate(raw):
         if keep[i]:
-            last_h, last_t = r["head"], r["tail"]
+            last_ml, last_h, last_t = r["midline"], r["head"], r["tail"]
             state = "detected"
         else:
             state = "interp"
         recs.append({"frame": i, "cx": float(cx[i]), "cy": float(cy[i]),
                      "box": r["box"] if keep[i] else None, "conf": r["conf"],
-                     "head": last_h, "tail": last_t,
+                     "midline": last_ml, "head": last_h, "tail": last_t,
                      "blen": r["blen"] if keep[i] else np.nan, "state": state})
     return recs, fps, dish
 
@@ -219,7 +256,11 @@ def cmd_track(a):
                 p = (int(r["cx"]), int(r["cy"]))
                 col = (0, 255, 255) if r["state"] == "detected" else (0, 140, 255)
                 cv2.circle(im, p, 10, col, -1)
-                if r["head"]:
+                ml = r["midline"]
+                if ml is not None and len(ml) >= 2:
+                    cv2.polylines(im, [np.asarray(ml, np.int32)], False, (0, 255, 0), 3)
+                    cv2.circle(im, (int(ml[0][0]), int(ml[0][1])), 7, (0, 0, 255), -1)  # head
+                elif r["head"]:
                     cv2.line(im, (int(r["head"][0]), int(r["head"][1])),
                              (int(r["tail"][0]), int(r["tail"][1])), (0, 255, 0), 3)
             vw.write(cv2.resize(im, (sW, sH)) if s != 1.0 else im); i += 1
