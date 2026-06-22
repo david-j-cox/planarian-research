@@ -1,73 +1,86 @@
-# Session handoff — worm localizer (M5), 2026-06-21
+# Session handoff — worm localizer (M5)
 
-Resume point for the next session. Everything below is on disk; data/labels are
-gitignored (live under `realtime_runs/` and `live_capture/`).
+Resume point for the next session. Everything below is on disk; data/labels/
+weights are gitignored (live under `realtime_runs/`, `live_capture/`, and
+`scripts_notebooks/runs/`).
 
-## Where we landed
+## Where we landed (updated 2026-06-22)
 Goal: a near-perfect worm localizer on the **go-to rig = latest white 7MP**
-(2026-06-02 15:54–16:08 series, 3360x2100, warm-white). These videos are now
-local in `live_capture/` (15 files).
+(2026-06-02 15:54–16:08 series, 3360x2100, warm-white; 15 clips local in
+`live_capture/`). Scored against the 600 human GT frames in
+`realtime_runs/label_white7mp/` (400 'active', 200 held-out 'eval').
 
-Key result chain (all measured against 600 human GT frames we labeled this
-session, `realtime_runs/label_white7mp/`):
+**A rig-trained YOLO is now the primary localizer and clearly wins.** Progress
+chain on the SAME 200 held-out GT frames (box-center error, mm):
 
-| Approach | Worm found | Median center err | p90 |
-|---|---|---|---|
-| YOLO nano (S3-trained), per-frame | 76.5% | 23.5 mm | 62 mm |
-| **bg-sub + dish mask** (per-frame) | **100%** | **1.0 mm** | 4.6 mm |
-| fusion tracker v1 (greedy nearest) | 100% | 1.3 mm | 31 mm (REGRESSED) |
-| fusion tracker v2 (Hampel) | not yet measured (eval killed, exit 137) | — | — |
+| Approach | Median | p90 | Max | Coverage |
+|---|---|---|---|---|
+| S3-YOLO, per-frame (old) | 23.5 | 62 | — | 76.5% |
+| bg-sub + dish (fusion_tracker) | 0.978 | 3.79 | 50.9 | 100% |
+| **white-7MP YOLO + temporal (yolo_tracker)** | **0.678** | **1.57** | **3.66** | 198/200 |
 
-Takeaways that are settled:
-- The YOLO model was doing blind per-frame detection and **58% of its boxes were
-  outside the dish**. Adding the priors (background subtraction + dish ROI) cut
-  median localization error **23x (23.5 -> 1.0 mm)** with zero training.
-- Background subtraction also normalizes lighting -> likely the key to cross-rig
-  robustness (white/blue/amber look alike after subtraction).
-- Greedy temporal tracking (follow nearest-to-previous) HURTS: it locks onto
-  debris / falls behind. The safe design is per-frame largest-blob-in-dish +
-  post-hoc Hampel spike rejection (already implemented in fusion_tracker.py).
+Settled this session:
+- **The fusion eval's "kills" were a bug, not the machine.** `pca_axis` used
+  `np.linalg.svd` with `full_matrices=True` → an M×M matrix on noisy contours
+  (44 GB, multi-minute hangs). Fixed to a 2×2 covariance eigenvector. The eval
+  is now resumable (`fusion_eval_checkpoint.json`).
+- fusion (Hampel) tracker: median 0.978 / p90 3.79, 100% localized — the v1
+  greedy-tracker p90 regression (31 mm) is gone. But a tail remained (max
+  50.9 mm) from wrong-blob frames where the worm was momentarily invisible to
+  bg-sub (noisy/illumination frames with 200–900 candidate blobs).
+- **Segmented (time-windowed) backgrounds were tried and REVERTED** — net
+  regression (median 0.978→1.35, p90 3.79→6.31): short per-segment windows let
+  a dwelling worm contaminate its own background. Do not revisit without
+  fixing that.
+- The S3-trained YOLO cannot localize on white-7MP even with a crop prior
+  (conf 0.15–0.42, errors 13–58 mm) → it was a domain-shift problem, fixed by
+  fine-tuning on the rig.
+- **Fine-tuning the S3 nano on 360 white-7MP frames** (build_white7mp_dataset
+  → train_yolo --name worm_white7mp_n): median 0.672 mm per-frame, **no
+  50 mm tail** (max 3.66), 100% within 5 mm. ~35× better than S3.
+
+## Current best tracker: `scripts_notebooks/yolo_tracker.py`
+- Position from `runs/pose/worm_white7mp_n/weights/best.pt` (dish gate ×1.10).
+- Morphology (head/tail/body-len via PCA) from the bg-sub contour nearest the
+  YOLO box; position never depends on bg-sub.
+- Shared `fusion_tracker.hampel_clean` temporal pass (spike reject + interp/
+  hold + smooth) fills no-detection frames and jitter.
+- `python yolo_tracker.py eval` (windowed, ~20 min) | `... track --video ... --overlay`
 
 ## IMMEDIATE next step (resume here)
-Re-run the fusion (Hampel) eval — last run was killed by the machine
-disconnect, not a bug:
+Run the full-video deployment path end-to-end and eyeball it:
 ```
 cd scripts_notebooks
-../venv/bin/python fusion_tracker.py eval        # ~3-5 min over 15 local videos
+../venv/bin/python yolo_tracker.py track --video ../live_capture/2026-06-02_16-00-37.mkv --overlay
 ```
-Compare median/p90 to the bg-sub-only baseline (1.0 / 4.6 mm). Hoped-for: p90
-drops below 4.6. If p90 is still driven by a few clips, those are the hard cases
-for the learned model.
-- Watch memory: `build_background` does `np.median` over 50 full-res frames per
-  video. If it OOMs, lower `n` or compute in float32 / streaming.
+Confirm the per-frame CSV + overlay look right (position locked on the worm,
+head/tail sensible, `interp` only on true gaps). Note runtime: per-frame YOLO
+at imgsz 1024 on MPS is ~3 fps → ~10 min per ~1900-frame clip.
 
-## Then (in priority order)
-1. If a tail of hard frames remains (meniscus, debris): add the trained YOLO
-   detector as a *disambiguation* layer, constrained to dish + near the tracked
-   position — used only when bg-sub is ambiguous.
-2. Retrain the detector on **bg-subtracted, dish-cropped** inputs (lighting-
-   invariant) using S3 frames + the 600 new GT labels + negatives. This is the
-   path to one model that works across white/blue/amber rigs. Hardware is ample
-   (M5 Max, 40-GPU-core, 128 GB) — YOLO11l @ imgsz 1280 is the target if needed.
-3. Confirm `mm_per_px` for the 16:xx videos. We used S3's 0.02657; if the rig
-   geometry shifted, the mm numbers need the right calibration (pixel metrics
-   are unaffected).
-4. Behavior model (Stage C) is done but separate (RandomForest, macro-F1 0.67);
-   revisit feature reconciliation later.
+## Then (priority order)
+1. **Cross-rig generalization** (handoff's original #2): the white-7MP model is
+   rig-specific (eval frames are other frames from the same 15 videos). For
+   blue/amber rigs, train on bg-subtracted / dish-cropped (lighting-invariant)
+   inputs, or add labels from other rigs. This is the path to ONE model.
+2. **Behavior model integration** (Stage C, RandomForest macro-F1 0.67): feed
+   it yolo_tracker's position + morphology; reconcile features.
+3. Speed: if real-time needed, export to CoreML/ONNX or lower imgsz; current
+   ~3 fps is fine for offline analysis only.
+4. Confirm `mm_per_px` (used S3's 0.02657) for the 16:xx rig geometry. Pixel
+   metrics are unaffected; only mm scaling.
 
-## Files written this session (scripts_notebooks/, tracked)
-- `build_yolo_dataset.py`, `train_yolo.py`, `eval_localizer.py`,
-  `eval_rigorous.py` — original YOLO pipeline (S3).
-- `behavior_classifier.py` — behavior model.
-- `infer_video.py` — end-to-end deploy (YOLO + mask-PCA + behavior).
-- `label_localization.py` — model-in-the-loop GT labeler (prep/label/export).
-- `bgsub_tracker.py` — bg-sub + dish detector + eval (the 1.0 mm result).
-- `fusion_tracker.py` — fusion tracker (bg-sub + dish + Hampel temporal) +
-  track/eval. **Resume by running its eval.**
+## Files this session (scripts_notebooks/, tracked)
+- `fusion_tracker.py` — bg-sub fusion tracker; pca_axis SVD fix; resumable
+  eval; `hampel_clean` extracted for reuse.
+- `build_white7mp_dataset.py` — YOLO pose dataset from label_white7mp (eval
+  pool held out).
+- `eval_white7mp_localizer.py` — per-frame YOLO box-center mm eval.
+- `yolo_tracker.py` — YOLO-primary tracker (track/eval). **Current best.**
 
 ## Artifacts (gitignored, on disk)
-- `realtime_runs/label_white7mp/` — manifest + `labels.json` (600 GT frames) +
-  cached frame images. THE precious artifact this session.
-- `scripts_notebooks/runs/pose/worm_s3_n/weights/best.pt` (+ .onnx) — nano YOLO.
-- `realtime_runs/behavior_clf.joblib` — behavior classifier.
+- `realtime_runs/label_white7mp/` — manifest + labels.json (600 GT) + cached
+  frames. THE precious artifact.
+- `scripts_notebooks/runs/pose/worm_white7mp_n/weights/best.pt` — rig localizer.
+- `scripts_notebooks/runs/pose/worm_s3_n/weights/best.pt` — S3 nano (source).
+- `realtime_runs/yolo_white7mp/` — fine-tune dataset (360 train / 40 val).
 - `live_capture/` — 8 S3 + 15 white-7MP go-to videos (local).
