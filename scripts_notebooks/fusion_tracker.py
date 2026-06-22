@@ -86,8 +86,14 @@ def pca_axis(contour):
     if len(pts) < 5:
         return None, None, np.nan
     mean = pts.mean(0)
-    axis = np.linalg.svd(pts - mean)[2][0]
-    proj = (pts - mean) @ axis
+    d = pts - mean
+    # Principal axis = top eigenvector of the 2x2 covariance. (Do NOT use
+    # np.linalg.svd(d): its default full_matrices=True allocates the M x M U
+    # matrix -- for a noisy contour with tens of thousands of perimeter points
+    # that's tens of GB and minutes of compute, and U is never used.)
+    cov = (d.T @ d) / len(d)
+    axis = np.linalg.eigh(cov)[1][:, -1]
+    proj = d @ axis
     return (mean + axis * proj.max()).tolist(), (mean + axis * proj.min()).tolist(), \
         float(proj.max() - proj.min())
 
@@ -177,23 +183,50 @@ def cmd_eval(a):
     for k in ev:
         by_vid.setdefault(man[k]["video"], []).append(k)
 
-    errs, missing = [], 0
+    # Resumable checkpoint: per-video {"errs":[mm...], "missing":int}. The long
+    # eval gets reaped before finishing, so bank each video as it completes and
+    # skip videos already done on restart. Delete the file to start fresh.
+    ckpt = a.checkpoint or os.path.join(a.label_dir, "fusion_eval_checkpoint.json")
+    done = json.load(open(ckpt)) if os.path.exists(ckpt) else {}
+    if done:
+        print(f"  resuming: {len(done)}/{len(by_vid)} videos already done")
+
+    # --max_videos caps how many uncheckpointed videos this process handles
+    # before exiting, so a shell loop can isolate each video in its own process
+    # (defensive: bounds peak memory if a single video ever misbehaves again).
+    n_this_run = 0
     for v, ks in sorted(by_vid.items()):
+        if v in done:
+            continue
+        if a.max_videos and n_this_run >= a.max_videos:
+            break
         vp = os.path.join(a.videos_dir, v)
         if not os.path.exists(vp):
-            print(f"  missing video {v}"); missing += len(ks); continue
+            print(f"  missing video {v}")
+            done[v] = {"errs": [], "missing": len(ks)}
+            json.dump(done, open(ckpt, "w")); continue
         recs, fps, dish = track(vp, a.mm_per_px)
         pos_by_frame = {r["frame"]: (r["cx"], r["cy"]) for r in recs}
+        verrs, vmiss = [], 0
         for k in ks:
             f = man[k]["frame"]; gt = lab[k]["box"]
             gx, gy = (gt[0]+gt[2])/2, (gt[1]+gt[3])/2
             if f in pos_by_frame and np.isfinite(pos_by_frame[f][0]):
                 px, py = pos_by_frame[f]
-                errs.append(np.hypot(px-gx, py-gy) * a.mm_per_px)
+                verrs.append(float(np.hypot(px-gx, py-gy) * a.mm_per_px))
             else:
-                missing += 1
+                vmiss += 1
+        done[v] = {"errs": verrs, "missing": vmiss}
+        json.dump(done, open(ckpt, "w"))   # bank progress after every video
+        n_this_run += 1
         print(f"  {v}: tracked ({len(ks)} GT frames)")
-    errs = np.array(errs)
+
+    remaining = [v for v in by_vid if v not in done]
+    if remaining:
+        print(f"\n  incomplete: {len(remaining)} video(s) left -> re-run to resume")
+        return
+    errs = np.array([e for d in done.values() for e in d["errs"]])
+    missing = sum(d["missing"] for d in done.values())
     print(f"\n=== FUSION TRACKER (bg-sub + dish + temporal) — {len(errs)} GT frames ===")
     print(f"  localized: {len(errs)}/{len(ev)}  (no-position: {missing})")
     print(f"  center error: median={np.median(errs):.3f}mm  mean={errs.mean():.3f}mm "
@@ -258,6 +291,11 @@ def main():
     e.add_argument("--label_dir", default=os.path.join(here, "..", "realtime_runs", "label_white7mp"))
     e.add_argument("--videos_dir", default=os.path.join(here, "..", "live_capture"))
     e.add_argument("--mm_per_px", type=float, default=0.02657)
+    e.add_argument("--checkpoint", default=None,
+                   help="resume file (default: <label_dir>/fusion_eval_checkpoint.json)")
+    e.add_argument("--max_videos", type=int, default=0,
+                   help="process at most N uncheckpointed videos this run (0=all); "
+                        "use 1 to isolate each video in its own process")
     e.set_defaults(func=cmd_eval)
     a = ap.parse_args()
     a.func(a)
