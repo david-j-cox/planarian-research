@@ -125,10 +125,22 @@ DEFINITIONS, not the model (RF is right at this size). Levers pursued:
    The label->train->active->label loop is reproducible; run it again for more
    turning/scrunch. Tool now has an 'x' no-worm skip + resume-at-first-unlabeled.
 
+### Corpus scope (checked 2026-06-23)
+Drive `My Drive/PlanarianVideos/` has ~968 videos across 4 dates, but only
+2026-06-02 is the CURRENT white rig (OpenDishWork/additional_videos = deprecated
+old setups, per user -- do NOT use). Of 39 white-rig clips: 14:31-14:49 (16
+clips) are EMPTY pre-worm setup footage (0-10% detection -- don't re-pull);
+14:58-16:08 (23 clips) hold a worm. Usable pool = `white7mp_signals_pool.npz`
+(23 clips, 40,134 detected frames). 16 empty clips sit in live_capture
+(gitignored), deletable.
+
 ### Still open
 - scrunch/peristalsis/reversing are scarce in this baseline session -- they are
-  EVOKED gaits. Biggest remaining lever = record across actual experimental
-  conditions (drug/stimulus) and label those. Data-collection decision (lab).
+  EVOKED gaits. NOT obtainable from existing footage (all 2026-06-02 baseline;
+  old rigs unusable). Biggest remaining lever = record evoked behavior on the
+  WHITE rig (drug/stimulus) and label that. Data-collection decision (lab).
+- Active batch 3 ready to label: `realtime_runs/white7mp_labels_active2` (93
+  windows). Label -> merge_label_sets (blind+active+active2) -> retrain.
 - A few clips show 1-8 residual head-flips (position-jump frames); only affects
   features on those windows. Tighten position jitter (speed gate) if needed.
 - Apply `behavior_clf_white7mp.joblib` across full clips for habituation/
