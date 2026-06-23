@@ -139,11 +139,32 @@ def cmd_active(args):
     cx = np.asarray(sig["cx_px"]); cy = np.asarray(sig["cy_px"])
     lost = np.asarray(sig["lost"])
     fps = float(sig["fps"]) if "fps" in sig else 30.0
+    mmpp = float(sig["mm_per_px"]) if float(sig["mm_per_px"]) > 0 else 1.0
     half = int(round(window_s * fps / 2))
     min_gap = int(round(args.min_gap_s * fps))
 
+    # JITTER GATE: exclude windows containing a SEVERE position jump. The worm
+    # maxes ~7 mm/s; a spike of 100s mm/s is the tracker bouncing on an unreliable
+    # dish-edge/rim track where the worm curls into the meniscus and is hard to
+    # even see (it appears to "disappear"). Uncertainty sampling otherwise walks
+    # straight into these. A modest threshold (default 50 mm/s) ignores ordinary
+    # box-center wobble but catches the wild rim jitter; the bad window is killed
+    # within +-half a window of the spike.
+    jbad = np.zeros(len(cx), bool)
+    for v in np.unique(video):
+        idx = np.where(video == v)[0]
+        idx = idx[np.argsort(nf[idx])]
+        x, y, L = cx[idx], cy[idx], lost[idx]
+        sp = np.zeros(len(idx))
+        sp[1:] = np.hypot(np.diff(x), np.diff(y)) * mmpp * fps
+        jump = (sp > args.max_jump_mm_s) & (L == 0)
+        if jump.any():
+            jbad[idx[np.convolve(jump.astype(int), np.ones(2 * half + 1), mode="same") > 0]] = True
+
     X = np.column_stack([feats[k] for k in FEATURES])
-    ok = np.all(np.isfinite(X), axis=1) & (lost == 0) & ~np.isnan(cx)
+    ok = np.all(np.isfinite(X), axis=1) & (lost == 0) & ~np.isnan(cx) & ~jbad
+    print(f"jitter gate (>{args.max_jump_mm_s:.0f} mm/s spike): {int(jbad.sum())} frames "
+          f"excluded; {int(ok.sum())} clean candidate frames remain")
     proba = np.zeros((len(X), len(classes)))
     proba[ok] = model.predict_proba(X[ok])   # proba[ok] is NaN-free
 
@@ -159,15 +180,19 @@ def cmd_active(args):
     top = np.full(len(X), -1)
     top[ok] = np.argmax(proba[ok], axis=1)
 
-    # Exclude windows near anything already labeled (per clip).
-    taken = defaultdict(list)
+    # Already-shown windows only need to be NON-OVERLAPPING with new picks (a
+    # half-window gap); applying the full min_gap to all of them blankets every
+    # clip and leaves nothing. New picks are spaced from each other by min_gap.
+    shown = defaultdict(list)
     if args.exclude_manifest_dir:
         ex = json.load(open(os.path.join(args.exclude_manifest_dir, "manifest.json")))
         for w in ex["windows"]:
-            taken[w["video"]].append(int(w["center_frame"]))
+            shown[w["video"]].append(int(w["center_frame"]))
+    taken = defaultdict(list)   # newly picked centers
 
     def far_enough(v, f):
-        return all(abs(f - c) >= min_gap for c in taken[v])
+        return (all(abs(f - c) >= half for c in shown[v]) and
+                all(abs(f - c) >= min_gap for c in taken[v]))
 
     cand = np.where(ok)[0]
 
@@ -481,6 +506,9 @@ def main():
                    help="starved classes to over-sample")
     a.add_argument("--min_gap_s", type=float, default=4.0,
                    help="min spacing (s) between picked window centers per clip")
+    a.add_argument("--max_jump_mm_s", type=float, default=50.0,
+                   help="exclude a window if the worm position spikes faster than "
+                        "this (mm/s) -- severe rim/edge jitter; worm max ~7 mm/s")
     a.add_argument("--exclude_manifest_dir", default=None,
                    help="manifest dir whose windows are already labeled (skip near them)")
     a.add_argument("--out_dir", required=True)
