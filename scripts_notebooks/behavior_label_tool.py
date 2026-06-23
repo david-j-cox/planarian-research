@@ -49,6 +49,8 @@ from behavior_rules import classify, BEHAVIORS   # noqa: E402
 WIN = "Blind Behavior Labeler"
 LABELABLE = [b for b in BEHAVIORS if b != "unknown"]  # human picks a real behavior
 DISP_MAX_W = 900
+NO_WORM = "no_worm"   # window has no/unusable worm (detection failure, dish edge);
+                      # recorded so it can be advanced past, dropped downstream
 
 
 # ── sample ────────────────────────────────────────────────────────────
@@ -304,8 +306,11 @@ def cmd_label(args):
         threading.Thread(target=_prefetch, args=(idx + 1,), daemon=True).start()
         return fr
 
-    i = 0
     n = len(windows)
+    # Resume at the first not-yet-labeled window (a relaunch shouldn't re-walk
+    # everything already done).
+    i = next((k for k, w in enumerate(windows)
+              if w["window_id"] not in done), 0)
     # Bottom panel sized to fit the title + one-behavior-per-line menu + footer,
     # so nothing is ever clipped regardless of crop size.
     menu_h = 40 + len(LABELABLE) * 30 + 64
@@ -344,7 +349,7 @@ def cmd_label(args):
             _put(strip, "SELECTED: " + cur, (12, y), 0.6,
                  (0, 255, 0) if sel else (0, 0, 255))
             y += 28
-            _put(strip, "1-7 toggle  n/SPACE next  b back  u clear  r replay  q save+quit",
+            _put(strip, "1-7 toggle  n/SPACE next  x no-worm  b back  u clear  r replay  q quit",
                  (12, y), 0.5, (180, 180, 180))
 
         draw_strip()
@@ -372,6 +377,12 @@ def cmd_label(args):
                     draw_strip()
             elif k == ord('u'):
                 sel = set(); draw_strip()
+            elif k == ord('x'):
+                # No worm / unusable window (detection failure, dish edge).
+                # Recorded as NO_WORM and dropped from training + accuracy.
+                done[wm["window_id"]] = {NO_WORM}
+                i += 1
+                break
             elif k == ord('r'):
                 fi = 0; next_t = _time.monotonic()
             elif k == ord('b'):

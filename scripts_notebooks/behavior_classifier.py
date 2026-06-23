@@ -45,12 +45,18 @@ def build_dataset(signals, blind_dir):
     video = np.asarray([str(v) for v in sig["video"]])
     nframe = np.asarray(sig["native_frame"]).astype(int)
 
-    classes = sorted({b for bs in labels.values() for b in bs})
+    # "no_worm" marks unusable windows (detection failure / dish edge); drop them
+    # and never let them become a class.
+    SKIP = {"no_worm", "unknown"}
+    classes = sorted({b for bs in labels.values() for b in bs} - SKIP)
     X, Y, rule, wids = [], [], [], []
-    rule_pred = {p["window_id"]: p["rule_pred"]
+    rule_pred = {p["window_id"]: p.get("rule_pred", p.get("model_pred", "unknown"))
                  for p in json.load(open(os.path.join(blind_dir, "predictions_hidden.json")))}
 
     for wid, behs in sorted(labels.items()):
+        behs = behs - SKIP
+        if not behs:                       # unusable / empty window: skip
+            continue
         w = windows[wid]
         m = (video == w["video"]) & (nframe == int(w["center_frame"]))
         if not m.any():

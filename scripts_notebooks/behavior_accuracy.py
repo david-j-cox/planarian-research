@@ -25,10 +25,14 @@ def main():
     args = ap.parse_args()
 
     md = args.manifest_dir
+    # predictions_hidden carries the rule's guess (`sample`) or the model's
+    # (`active`); accept either so this scores both kinds of batch.
     with open(os.path.join(md, "predictions_hidden.json")) as f:
-        pred = {h["window_id"]: h["rule_pred"] for h in json.load(f)}
-    # human labels are now SETS (';'-joined). The rule predicts ONE behavior per
+        pred = {h["window_id"]: h.get("rule_pred", h.get("model_pred", "unknown"))
+                for h in json.load(f)}
+    # human labels are SETS (';'-joined). The predictor emits ONE behavior per
     # window, so its "set" is a singleton. Scoring is per-behavior present/absent.
+    SKIP = {"no_worm", "unknown"}   # unusable windows: not scored
     human = {}
     lp = os.path.join(md, "human_labels.csv")
     if not os.path.exists(lp):
@@ -37,7 +41,7 @@ def main():
         for r in csv.DictReader(f):
             human[int(r["window_id"])] = {b for b in r["behavior"].split(";") if b}
 
-    wids = [w for w in sorted(human) if w in pred]
+    wids = [w for w in sorted(human) if w in pred and (human[w] - SKIP)]
     if not wids:
         raise SystemExit("No overlapping labeled+predicted windows.")
     n = len(wids)
