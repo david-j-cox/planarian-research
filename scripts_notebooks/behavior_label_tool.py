@@ -138,6 +138,9 @@ def cmd_label(args):
 
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
     crop_size = args.crop_px
+    # Display width the crop is scaled to. Decoupled from crop_px so a generous
+    # crop (worm stays in frame) still renders small enough to play at true fps.
+    disp_w = args.disp_w
 
     # One cached VideoCapture per video, reused across windows (the manifest is
     # sorted, so consecutive windows usually share a clip). Guarded by a lock
@@ -164,7 +167,7 @@ def cmd_label(args):
                 if not ok:
                     break
                 c = _crop(img, wm["cx"], wm["cy"], crop_size)
-                s = min(1.0, DISP_MAX_W / max(1, c.shape[1]))
+                s = min(1.0, disp_w / max(1, c.shape[1]))
                 frames.append(cv2.resize(
                     c, (int(c.shape[1] * s), int(c.shape[0] * s))))
         return frames
@@ -200,6 +203,7 @@ def cmd_label(args):
     # Bottom panel sized to fit the title + one-behavior-per-line menu + footer,
     # so nothing is ever clipped regardless of crop size.
     menu_h = 40 + len(LABELABLE) * 30 + 64
+    frame_period = 1.0 / fps
     while 0 <= i < n:
         wm = windows[i]
         frames = get_frames(i)
@@ -209,18 +213,17 @@ def cmd_label(args):
         sel = set(done.get(wm["window_id"], set()))
         bh, bw_ = frames[0].shape[:2]
         pw = max(bw_, 420)
-        # Pre-render each video frame onto a full-size canvas ONCE (the costly
-        # crop/resize is already done in load_window; this just blits). The menu
-        # strip is rebuilt only when `sel` changes, not every frame — that
-        # per-frame text drawing was what made playback choppy.
-        canvases = []
-        for f_img in frames:
-            cvs = np.full((bh + menu_h, pw, 3), 25, np.uint8)
-            cvs[:bh, :f_img.shape[1]] = f_img
-            canvases.append(cvs)
+        nframes = len(frames)
+        # One PERSISTENT display buffer. Per frame we overwrite only the video
+        # region (the part that changes); the menu strip is drawn into the bottom
+        # only when `sel` changes. The previous code copied a full canvas AND
+        # re-blitted the strip every frame, and picked the frame by wall clock
+        # (so a slow render SKIPPED frames unevenly) -- that was the choppiness.
+        disp = np.full((bh + menu_h, pw, 3), 25, np.uint8)
 
-        def menu_strip():
-            strip = np.full((menu_h, pw, 3), 25, np.uint8)
+        def draw_strip():
+            strip = disp[bh:, :]
+            strip[:] = 25
             y = 26
             _put(strip, f"window {i+1}/{n}   [{len(done)} done]   "
                  f"TOGGLE behaviors (multi):", (12, y), 0.55, (0, 220, 0))
@@ -235,30 +238,36 @@ def cmd_label(args):
             _put(strip, "SELECTED: " + cur, (12, y), 0.6,
                  (0, 255, 0) if sel else (0, 0, 255))
             y += 28
-            _put(strip, "1-7 toggle   n/SPACE next   b back   u clear   q save+quit",
+            _put(strip, "1-7 toggle  n/SPACE next  b back  u clear  r replay  q save+quit",
                  (12, y), 0.5, (180, 180, 180))
-            return strip
 
-        strip = menu_strip()
-        t0 = _time.monotonic()
-        nframes = len(canvases)
+        draw_strip()
+        fi = 0
+        next_t = _time.monotonic()
         while True:
-            # Wall-clock playback at the real capture fps -> smooth 3s loop.
-            fi = int(((_time.monotonic() - t0) * fps)) % nframes
-            disp = canvases[fi].copy()
-            disp[bh:, :] = strip
+            vf = frames[fi]
+            disp[:bh, :vf.shape[1]] = vf
             cv2.imshow(WIN, disp)
-            k = cv2.waitKey(15) & 0xFF
+            # Advance exactly one frame per period; waitKey absorbs the remaining
+            # time so playback holds true fps and, under load, slows EVENLY
+            # instead of skipping frames.
+            now = _time.monotonic()
+            delay = max(1, int((next_t + frame_period - now) * 1000))
+            k = cv2.waitKey(delay) & 0xFF
+            next_t += frame_period
+            fi = (fi + 1) % nframes
+            if next_t < now - frame_period:       # fell far behind: resync clock
+                next_t = now
             if ord('1') <= k <= ord('9'):
                 j = k - ord('1')
                 if j < len(LABELABLE):
                     b = LABELABLE[j]
                     sel.discard(b) if b in sel else sel.add(b)   # toggle
-                    strip = menu_strip()
+                    draw_strip()
             elif k == ord('u'):
-                sel = set(); strip = menu_strip()
+                sel = set(); draw_strip()
             elif k == ord('r'):
-                t0 = _time.monotonic()
+                fi = 0; next_t = _time.monotonic()
             elif k == ord('b'):
                 if sel:
                     done[wm["window_id"]] = set(sel)
@@ -326,7 +335,12 @@ def main():
     l = sub.add_parser("label", help="Blind labeling GUI.")
     l.add_argument("--manifest_dir", required=True)
     l.add_argument("--clips_dir", default=None)
-    l.add_argument("--crop_px", type=int, default=500)
+    l.add_argument("--crop_px", type=int, default=600,
+                   help="crop window around the worm (px); larger keeps a moving "
+                        "worm in frame")
+    l.add_argument("--disp_w", type=int, default=560,
+                   help="display width the crop is scaled to; smaller plays "
+                        "smoother (decoupled from crop_px)")
     l.set_defaults(func=cmd_label)
 
     args = ap.parse_args()
