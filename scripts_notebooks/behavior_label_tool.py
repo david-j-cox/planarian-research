@@ -358,6 +358,13 @@ def cmd_label(args):
         while True:
             vf = frames[fi]
             disp[:bh, :vf.shape[1]] = vf
+            # Playback heartbeat: a bar that sweeps left->right each 3s loop, so a
+            # perfectly STILL worm (resting) is visibly distinguishable from a
+            # frozen player. Purely a time indicator -> does not bias the blind
+            # behavior call.
+            prog = int(pw * fi / max(1, nframes - 1))
+            disp[0:5, :, :] = 40
+            disp[0:5, :prog, :] = (0, 220, 0)
             cv2.imshow(WIN, disp)
             # Advance exactly one frame per period; waitKey absorbs the remaining
             # time so playback holds true fps and, under load, slows EVENLY
