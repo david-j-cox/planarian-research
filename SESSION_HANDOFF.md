@@ -134,6 +134,17 @@ clips) are EMPTY pre-worm setup footage (0-10% detection -- don't re-pull);
 (23 clips, 40,134 detected frames). 16 empty clips sit in live_capture
 (gitignored), deletable.
 
+### Source videos contain PADDED DUPLICATE frames (found 2026-06-23)
+The 7MP capture can't sustain true 30fps, so OBS repeats frames to fill the
+timeline. Full-clip rate 1.7-3.3%, in runs up to 5-6 identical frames (~0.2s).
+Timestamps are evenly stamped (so the earlier "clean 30fps" check missed it --
+it only looked at POS_MSEC spacing, not identical content). The label GUI now
+drops exact-duplicate consecutive frames in playback. OPEN: yolo_to_signals does
+NOT dedup, so behavior features have a small bias toward lower speed / more
+"resting" (~2-3% of frames); de-duping there would shift native_frame indices
+and break label-window matching, so left as a follow-up. Effective unique rate
+~29 fps.
+
 ### Still open
 - scrunch/peristalsis/reversing are scarce in this baseline session -- they are
   EVOKED gaits. NOT obtainable from existing footage (all 2026-06-02 baseline;
