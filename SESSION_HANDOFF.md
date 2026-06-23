@@ -103,14 +103,33 @@ wobble the position dot.
   `behavior_label_tool.py` (paced one-frame-per-period + tiny persistent display
   buffer; new --disp_w). Source clips are clean 30fps (verified all 15).
 
-### Next levers (behavior)
-- turning F1 is the weak spot (0.43) -- gliding/turning overlap; more turning
-  labels or better heading features would help. scrunch has only 5 examples.
-- A few clips still show 1-8 residual head-flips (position-jump frames); only
-  affects features on those windows. Tighten the position jitter (speed gate)
-  if it matters.
+### Improving the behavior model (2026-06-23): 3 levers worked
+Finding: at n=126 with scrunch=5/turning=22, macro-F1 bounces +/-0.05 from
+feature/model variants -- the binding constraint is per-class DATA + behavior
+DEFINITIONS, not the model (RF is right at this size). Levers pursued:
+1. MOTION FEATURES (`ang_vel_p90_deg_s`, `path_curv_deg_mm`, `body_curv_deg`,
+   jitter-robust) -- NEUTRAL on current data (RF 0.681->0.669). The raw
+   (non-robust) variant scored 0.718 but that was jitter overfit (won't
+   generalize); rejected. Kept robust versions for when classes grow.
+2. ETHOGRAM (`docs/behavior_ethogram.md`) -- measurable per-gait definitions,
+   explicit gliding-vs-turning boundary (the main label-noise source). Use it
+   for the next labeling round; consider a 2nd-labeler inter-rater check.
+3. ACTIVE LEARNING (`behavior_label_tool.py active`) -- next batch in
+   `realtime_runs/white7mp_labels_active/` (95 windows, median margin 0.126,
+   16 turning-boundary cases). LABEL THIS NEXT:
+     python behavior_label_tool.py label --manifest_dir ../realtime_runs/white7mp_labels_active
+   then merge with the first 126 and retrain (point classifier at a combined
+   signals+labels set, or run on each and concat).
+
+### Still open
+- scrunch/peristalsis/reversing are scarce in this baseline session -- they are
+  EVOKED gaits. Biggest remaining lever = record across actual experimental
+  conditions (drug/stimulus) and label those. Data-collection decision (lab).
+- A few clips show 1-8 residual head-flips (position-jump frames); only affects
+  features on those windows. Tighten position jitter (speed gate) if needed.
 - Apply `behavior_clf_white7mp.joblib` across full clips for habituation/
-  pharmacology readouts (see `habituation_analysis.py`, `infer_video.py`).
+  pharmacology readouts (`habituation_analysis.py`, `infer_video.py`).
+- Label-tool playback was choppy mid-session; fixed (paced playback; --disp_w).
 
 ## Then (priority order)
 1. **Cross-rig generalization**: the white-7MP model is rig-specific (eval
