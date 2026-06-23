@@ -1,0 +1,1118 @@
+[
+  {
+    "window_id": 0,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.345,
+      "scrunching": 0.67,
+      "turning": 0.415,
+      "wig_wag": 0.517
+    },
+    "min_margin": 0.017,
+    "time_s": 0.46666666865348816
+  },
+  {
+    "window_id": 1,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.711,
+      "scrunching": 0.086,
+      "turning": 0.643,
+      "wig_wag": 0.173
+    },
+    "min_margin": 0.143,
+    "time_s": 5.166666507720947
+  },
+  {
+    "window_id": 2,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.895,
+      "scrunching": 0.043,
+      "turning": 0.331,
+      "wig_wag": 0.139
+    },
+    "min_margin": 0.169,
+    "time_s": 9.933333396911621
+  },
+  {
+    "window_id": 3,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.43,
+      "scrunching": 0.098,
+      "turning": 0.685,
+      "wig_wag": 0.511
+    },
+    "min_margin": 0.011,
+    "time_s": 14.033333778381348
+  },
+  {
+    "window_id": 4,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.927,
+      "scrunching": 0.017,
+      "turning": 0.502,
+      "wig_wag": 0.13
+    },
+    "min_margin": 0.002,
+    "time_s": 18.96666717529297
+  },
+  {
+    "window_id": 5,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.835,
+      "scrunching": 0.057,
+      "turning": 0.746,
+      "wig_wag": 0.23
+    },
+    "min_margin": 0.246,
+    "time_s": 23.16666603088379
+  },
+  {
+    "window_id": 6,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.968,
+      "scrunching": 0.015,
+      "turning": 0.451,
+      "wig_wag": 0.077
+    },
+    "min_margin": 0.049,
+    "time_s": 29.46666717529297
+  },
+  {
+    "window_id": 7,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.937,
+      "scrunching": 0.124,
+      "turning": 0.501,
+      "wig_wag": 0.137
+    },
+    "min_margin": 0.001,
+    "time_s": 33.53333282470703
+  },
+  {
+    "window_id": 8,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.389,
+      "scrunching": 0.667,
+      "turning": 0.551,
+      "wig_wag": 0.444
+    },
+    "min_margin": 0.051,
+    "time_s": 37.599998474121094
+  },
+  {
+    "window_id": 9,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.217,
+      "scrunching": 0.843,
+      "turning": 0.674,
+      "wig_wag": 0.376
+    },
+    "min_margin": 0.124,
+    "time_s": 42.900001525878906
+  },
+  {
+    "window_id": 10,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.762,
+      "scrunching": 0.088,
+      "turning": 0.643,
+      "wig_wag": 0.31
+    },
+    "min_margin": 0.143,
+    "time_s": 46.900001525878906
+  },
+  {
+    "window_id": 11,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.737,
+      "scrunching": 0.242,
+      "turning": 0.722,
+      "wig_wag": 0.205
+    },
+    "min_margin": 0.222,
+    "time_s": 52.70000076293945
+  },
+  {
+    "window_id": 12,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.96,
+      "scrunching": 0.031,
+      "turning": 0.351,
+      "wig_wag": 0.1
+    },
+    "min_margin": 0.149,
+    "time_s": 59.16666793823242
+  },
+  {
+    "window_id": 13,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.62,
+      "scrunching": 0.555,
+      "turning": 0.218,
+      "wig_wag": 0.014
+    },
+    "min_margin": 0.055,
+    "time_s": 1.0
+  },
+  {
+    "window_id": 14,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.508,
+      "scrunching": 0.636,
+      "turning": 0.81,
+      "wig_wag": 0.31
+    },
+    "min_margin": 0.008,
+    "time_s": 5.066666603088379
+  },
+  {
+    "window_id": 15,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.599,
+      "scrunching": 0.023,
+      "turning": 0.36,
+      "wig_wag": 0.517
+    },
+    "min_margin": 0.017,
+    "time_s": 9.133333206176758
+  },
+  {
+    "window_id": 16,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.323,
+      "scrunching": 0.825,
+      "turning": 0.346,
+      "wig_wag": 0.469
+    },
+    "min_margin": 0.031,
+    "time_s": 16.03333282470703
+  },
+  {
+    "window_id": 17,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.978,
+      "scrunching": 0.021,
+      "turning": 0.463,
+      "wig_wag": 0.077
+    },
+    "min_margin": 0.037,
+    "time_s": 23.133333206176758
+  },
+  {
+    "window_id": 18,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.959,
+      "scrunching": 0.015,
+      "turning": 0.712,
+      "wig_wag": 0.11
+    },
+    "min_margin": 0.212,
+    "time_s": 27.299999237060547
+  },
+  {
+    "window_id": 19,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.862,
+      "scrunching": 0.032,
+      "turning": 0.812,
+      "wig_wag": 0.173
+    },
+    "min_margin": 0.312,
+    "time_s": 31.633333206176758
+  },
+  {
+    "window_id": 20,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.794,
+      "scrunching": 0.133,
+      "turning": 0.702,
+      "wig_wag": 0.182
+    },
+    "min_margin": 0.202,
+    "time_s": 36.233333587646484
+  },
+  {
+    "window_id": 21,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.94,
+      "scrunching": 0.089,
+      "turning": 0.41,
+      "wig_wag": 0.076
+    },
+    "min_margin": 0.09,
+    "time_s": 40.53333282470703
+  },
+  {
+    "window_id": 22,
+    "model_pred": "wig_wag",
+    "model_proba": {
+      "gliding": 0.396,
+      "scrunching": 0.259,
+      "turning": 0.109,
+      "wig_wag": 0.494
+    },
+    "min_margin": 0.006,
+    "time_s": 44.53333282470703
+  },
+  {
+    "window_id": 23,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.976,
+      "scrunching": 0.061,
+      "turning": 0.217,
+      "wig_wag": 0.086
+    },
+    "min_margin": 0.283,
+    "time_s": 49.233333587646484
+  },
+  {
+    "window_id": 24,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.403,
+      "scrunching": 0.808,
+      "turning": 0.382,
+      "wig_wag": 0.014
+    },
+    "min_margin": 0.097,
+    "time_s": 10.766666412353516
+  },
+  {
+    "window_id": 25,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.51,
+      "scrunching": 0.355,
+      "turning": 0.307,
+      "wig_wag": 0.234
+    },
+    "min_margin": 0.01,
+    "time_s": 17.799999237060547
+  },
+  {
+    "window_id": 26,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.408,
+      "scrunching": 0.232,
+      "turning": 0.143,
+      "wig_wag": 0.375
+    },
+    "min_margin": 0.092,
+    "time_s": 22.46666717529297
+  },
+  {
+    "window_id": 27,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.956,
+      "scrunching": 0.048,
+      "turning": 0.295,
+      "wig_wag": 0.039
+    },
+    "min_margin": 0.205,
+    "time_s": 26.46666717529297
+  },
+  {
+    "window_id": 28,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.339,
+      "scrunching": 0.387,
+      "turning": 0.258,
+      "wig_wag": 0.373
+    },
+    "min_margin": 0.113,
+    "time_s": 30.66666603088379
+  },
+  {
+    "window_id": 29,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.853,
+      "scrunching": 0.15,
+      "turning": 0.145,
+      "wig_wag": 0.094
+    },
+    "min_margin": 0.35,
+    "time_s": 34.66666793823242
+  },
+  {
+    "window_id": 30,
+    "model_pred": "wig_wag",
+    "model_proba": {
+      "gliding": 0.421,
+      "scrunching": 0.233,
+      "turning": 0.099,
+      "wig_wag": 0.438
+    },
+    "min_margin": 0.062,
+    "time_s": 39.03333282470703
+  },
+  {
+    "window_id": 31,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.509,
+      "scrunching": 0.392,
+      "turning": 0.248,
+      "wig_wag": 0.41
+    },
+    "min_margin": 0.009,
+    "time_s": 44.13333511352539
+  },
+  {
+    "window_id": 32,
+    "model_pred": "wig_wag",
+    "model_proba": {
+      "gliding": 0.309,
+      "scrunching": 0.235,
+      "turning": 0.121,
+      "wig_wag": 0.52
+    },
+    "min_margin": 0.02,
+    "time_s": 49.20000076293945
+  },
+  {
+    "window_id": 33,
+    "model_pred": "wig_wag",
+    "model_proba": {
+      "gliding": 0.363,
+      "scrunching": 0.202,
+      "turning": 0.119,
+      "wig_wag": 0.501
+    },
+    "min_margin": 0.001,
+    "time_s": 54.900001525878906
+  },
+  {
+    "window_id": 34,
+    "model_pred": "wig_wag",
+    "model_proba": {
+      "gliding": 0.402,
+      "scrunching": 0.233,
+      "turning": 0.24,
+      "wig_wag": 0.501
+    },
+    "min_margin": 0.001,
+    "time_s": 59.86666488647461
+  },
+  {
+    "window_id": 35,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.388,
+      "scrunching": 0.839,
+      "turning": 0.549,
+      "wig_wag": 0.051
+    },
+    "min_margin": 0.049,
+    "time_s": 0.6333333253860474
+  },
+  {
+    "window_id": 36,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.501,
+      "scrunching": 0.317,
+      "turning": 0.295,
+      "wig_wag": 0.355
+    },
+    "min_margin": 0.001,
+    "time_s": 5.599999904632568
+  },
+  {
+    "window_id": 37,
+    "model_pred": "wig_wag",
+    "model_proba": {
+      "gliding": 0.277,
+      "scrunching": 0.273,
+      "turning": 0.301,
+      "wig_wag": 0.496
+    },
+    "min_margin": 0.004,
+    "time_s": 10.933333396911621
+  },
+  {
+    "window_id": 38,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.76,
+      "scrunching": 0.07,
+      "turning": 0.725,
+      "wig_wag": 0.232
+    },
+    "min_margin": 0.225,
+    "time_s": 15.300000190734863
+  },
+  {
+    "window_id": 39,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.702,
+      "scrunching": 0.302,
+      "turning": 0.497,
+      "wig_wag": 0.033
+    },
+    "min_margin": 0.003,
+    "time_s": 20.366666793823242
+  },
+  {
+    "window_id": 40,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.795,
+      "scrunching": 0.145,
+      "turning": 0.727,
+      "wig_wag": 0.16
+    },
+    "min_margin": 0.227,
+    "time_s": 24.566667556762695
+  },
+  {
+    "window_id": 41,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.758,
+      "scrunching": 0.253,
+      "turning": 0.704,
+      "wig_wag": 0.254
+    },
+    "min_margin": 0.204,
+    "time_s": 29.33333396911621
+  },
+  {
+    "window_id": 42,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.306,
+      "scrunching": 0.526,
+      "turning": 0.799,
+      "wig_wag": 0.374
+    },
+    "min_margin": 0.026,
+    "time_s": 33.86666488647461
+  },
+  {
+    "window_id": 43,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.92,
+      "scrunching": 0.026,
+      "turning": 0.224,
+      "wig_wag": 0.248
+    },
+    "min_margin": 0.252,
+    "time_s": 38.86666488647461
+  },
+  {
+    "window_id": 44,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.811,
+      "scrunching": 0.333,
+      "turning": 0.645,
+      "wig_wag": 0.039
+    },
+    "min_margin": 0.145,
+    "time_s": 46.36666488647461
+  },
+  {
+    "window_id": 45,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.8,
+      "scrunching": 0.312,
+      "turning": 0.721,
+      "wig_wag": 0.042
+    },
+    "min_margin": 0.188,
+    "time_s": 51.79999923706055
+  },
+  {
+    "window_id": 46,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.752,
+      "scrunching": 0.152,
+      "turning": 0.753,
+      "wig_wag": 0.232
+    },
+    "min_margin": 0.252,
+    "time_s": 57.79999923706055
+  },
+  {
+    "window_id": 47,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.726,
+      "scrunching": 0.324,
+      "turning": 0.755,
+      "wig_wag": 0.046
+    },
+    "min_margin": 0.176,
+    "time_s": 63.599998474121094
+  },
+  {
+    "window_id": 48,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.431,
+      "scrunching": 0.755,
+      "turning": 0.337,
+      "wig_wag": 0.054
+    },
+    "min_margin": 0.069,
+    "time_s": 0.36666667461395264
+  },
+  {
+    "window_id": 49,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.705,
+      "scrunching": 0.212,
+      "turning": 0.83,
+      "wig_wag": 0.249
+    },
+    "min_margin": 0.205,
+    "time_s": 5.0
+  },
+  {
+    "window_id": 50,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.635,
+      "scrunching": 0.433,
+      "turning": 0.397,
+      "wig_wag": 0.174
+    },
+    "min_margin": 0.067,
+    "time_s": 9.0
+  },
+  {
+    "window_id": 51,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.75,
+      "scrunching": 0.207,
+      "turning": 0.704,
+      "wig_wag": 0.195
+    },
+    "min_margin": 0.204,
+    "time_s": 13.066666603088379
+  },
+  {
+    "window_id": 52,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.503,
+      "scrunching": 0.726,
+      "turning": 0.649,
+      "wig_wag": 0.029
+    },
+    "min_margin": 0.003,
+    "time_s": 18.566667556762695
+  },
+  {
+    "window_id": 53,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.9,
+      "scrunching": 0.049,
+      "turning": 0.773,
+      "wig_wag": 0.083
+    },
+    "min_margin": 0.273,
+    "time_s": 23.03333282470703
+  },
+  {
+    "window_id": 54,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.551,
+      "scrunching": 0.259,
+      "turning": 0.501,
+      "wig_wag": 0.173
+    },
+    "min_margin": 0.001,
+    "time_s": 30.133333206176758
+  },
+  {
+    "window_id": 55,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.788,
+      "scrunching": 0.106,
+      "turning": 0.802,
+      "wig_wag": 0.166
+    },
+    "min_margin": 0.288,
+    "time_s": 36.43333435058594
+  },
+  {
+    "window_id": 56,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.604,
+      "scrunching": 0.521,
+      "turning": 0.241,
+      "wig_wag": 0.018
+    },
+    "min_margin": 0.021,
+    "time_s": 43.63333511352539
+  },
+  {
+    "window_id": 57,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.787,
+      "scrunching": 0.218,
+      "turning": 0.679,
+      "wig_wag": 0.177
+    },
+    "min_margin": 0.179,
+    "time_s": 49.20000076293945
+  },
+  {
+    "window_id": 58,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.759,
+      "scrunching": 0.163,
+      "turning": 0.764,
+      "wig_wag": 0.232
+    },
+    "min_margin": 0.259,
+    "time_s": 54.5
+  },
+  {
+    "window_id": 59,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.589,
+      "scrunching": 0.475,
+      "turning": 0.411,
+      "wig_wag": 0.018
+    },
+    "min_margin": 0.025,
+    "time_s": 58.766666412353516
+  },
+  {
+    "window_id": 60,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.579,
+      "scrunching": 0.515,
+      "turning": 0.416,
+      "wig_wag": 0.018
+    },
+    "min_margin": 0.015,
+    "time_s": 2.433333396911621
+  },
+  {
+    "window_id": 61,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.737,
+      "scrunching": 0.328,
+      "turning": 0.65,
+      "wig_wag": 0.04
+    },
+    "min_margin": 0.15,
+    "time_s": 7.133333206176758
+  },
+  {
+    "window_id": 62,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.409,
+      "scrunching": 0.33,
+      "turning": 0.668,
+      "wig_wag": 0.186
+    },
+    "min_margin": 0.091,
+    "time_s": 14.566666603088379
+  },
+  {
+    "window_id": 63,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.498,
+      "scrunching": 0.209,
+      "turning": 0.463,
+      "wig_wag": 0.237
+    },
+    "min_margin": 0.002,
+    "time_s": 18.566667556762695
+  },
+  {
+    "window_id": 64,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.84,
+      "scrunching": 0.04,
+      "turning": 0.786,
+      "wig_wag": 0.148
+    },
+    "min_margin": 0.286,
+    "time_s": 24.5
+  },
+  {
+    "window_id": 65,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.501,
+      "scrunching": 0.283,
+      "turning": 0.471,
+      "wig_wag": 0.296
+    },
+    "min_margin": 0.001,
+    "time_s": 29.0
+  },
+  {
+    "window_id": 66,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.499,
+      "scrunching": 0.676,
+      "turning": 0.641,
+      "wig_wag": 0.033
+    },
+    "min_margin": 0.001,
+    "time_s": 33.29999923706055
+  },
+  {
+    "window_id": 67,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.831,
+      "scrunching": 0.263,
+      "turning": 0.503,
+      "wig_wag": 0.04
+    },
+    "min_margin": 0.003,
+    "time_s": 38.400001525878906
+  },
+  {
+    "window_id": 68,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.627,
+      "scrunching": 0.598,
+      "turning": 0.673,
+      "wig_wag": 0.04
+    },
+    "min_margin": 0.098,
+    "time_s": 43.733333587646484
+  },
+  {
+    "window_id": 69,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.723,
+      "scrunching": 0.194,
+      "turning": 0.74,
+      "wig_wag": 0.231
+    },
+    "min_margin": 0.223,
+    "time_s": 48.0
+  },
+  {
+    "window_id": 70,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.495,
+      "scrunching": 0.204,
+      "turning": 0.588,
+      "wig_wag": 0.339
+    },
+    "min_margin": 0.005,
+    "time_s": 52.16666793823242
+  },
+  {
+    "window_id": 71,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.777,
+      "scrunching": 0.345,
+      "turning": 0.499,
+      "wig_wag": 0.303
+    },
+    "min_margin": 0.001,
+    "time_s": 57.06666564941406
+  },
+  {
+    "window_id": 72,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.513,
+      "scrunching": 0.675,
+      "turning": 0.214,
+      "wig_wag": 0.018
+    },
+    "min_margin": 0.013,
+    "time_s": 61.53333282470703
+  },
+  {
+    "window_id": 73,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.684,
+      "scrunching": 0.463,
+      "turning": 0.391,
+      "wig_wag": 0.018
+    },
+    "min_margin": 0.037,
+    "time_s": 3.6666667461395264
+  },
+  {
+    "window_id": 74,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.748,
+      "scrunching": 0.296,
+      "turning": 0.365,
+      "wig_wag": 0.018
+    },
+    "min_margin": 0.135,
+    "time_s": 7.666666507720947
+  },
+  {
+    "window_id": 75,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.502,
+      "scrunching": 0.682,
+      "turning": 0.318,
+      "wig_wag": 0.018
+    },
+    "min_margin": 0.002,
+    "time_s": 11.666666984558105
+  },
+  {
+    "window_id": 76,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.863,
+      "scrunching": 0.113,
+      "turning": 0.619,
+      "wig_wag": 0.147
+    },
+    "min_margin": 0.119,
+    "time_s": 15.800000190734863
+  },
+  {
+    "window_id": 77,
+    "model_pred": "scrunching",
+    "model_proba": {
+      "gliding": 0.514,
+      "scrunching": 0.673,
+      "turning": 0.223,
+      "wig_wag": 0.014
+    },
+    "min_margin": 0.014,
+    "time_s": 20.100000381469727
+  },
+  {
+    "window_id": 78,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.689,
+      "scrunching": 0.368,
+      "turning": 0.647,
+      "wig_wag": 0.062
+    },
+    "min_margin": 0.132,
+    "time_s": 26.66666603088379
+  },
+  {
+    "window_id": 79,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.752,
+      "scrunching": 0.315,
+      "turning": 0.687,
+      "wig_wag": 0.035
+    },
+    "min_margin": 0.185,
+    "time_s": 30.66666603088379
+  },
+  {
+    "window_id": 80,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.707,
+      "scrunching": 0.428,
+      "turning": 0.666,
+      "wig_wag": 0.031
+    },
+    "min_margin": 0.072,
+    "time_s": 37.233333587646484
+  },
+  {
+    "window_id": 81,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.649,
+      "scrunching": 0.403,
+      "turning": 0.68,
+      "wig_wag": 0.044
+    },
+    "min_margin": 0.097,
+    "time_s": 44.5
+  },
+  {
+    "window_id": 82,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.612,
+      "scrunching": 0.441,
+      "turning": 0.658,
+      "wig_wag": 0.031
+    },
+    "min_margin": 0.059,
+    "time_s": 48.5
+  },
+  {
+    "window_id": 83,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.916,
+      "scrunching": 0.06,
+      "turning": 0.502,
+      "wig_wag": 0.093
+    },
+    "min_margin": 0.002,
+    "time_s": 54.56666564941406
+  },
+  {
+    "window_id": 84,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.745,
+      "scrunching": 0.328,
+      "turning": 0.76,
+      "wig_wag": 0.037
+    },
+    "min_margin": 0.172,
+    "time_s": 60.13333511352539
+  },
+  {
+    "window_id": 85,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.706,
+      "scrunching": 0.192,
+      "turning": 0.733,
+      "wig_wag": 0.274
+    },
+    "min_margin": 0.206,
+    "time_s": 2.700000047683716
+  },
+  {
+    "window_id": 86,
+    "model_pred": "gliding",
+    "model_proba": {
+      "gliding": 0.771,
+      "scrunching": 0.054,
+      "turning": 0.481,
+      "wig_wag": 0.13
+    },
+    "min_margin": 0.019,
+    "time_s": 6.699999809265137
+  },
+  {
+    "window_id": 87,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.249,
+      "scrunching": 0.22,
+      "turning": 0.5,
+      "wig_wag": 0.277
+    },
+    "min_margin": 0.0,
+    "time_s": 11.366666793823242
+  },
+  {
+    "window_id": 88,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.239,
+      "scrunching": 0.185,
+      "turning": 0.787,
+      "wig_wag": 0.288
+    },
+    "min_margin": 0.212,
+    "time_s": 17.133333206176758
+  },
+  {
+    "window_id": 89,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.276,
+      "scrunching": 0.165,
+      "turning": 0.457,
+      "wig_wag": 0.268
+    },
+    "min_margin": 0.043,
+    "time_s": 21.133333206176758
+  },
+  {
+    "window_id": 90,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.288,
+      "scrunching": 0.108,
+      "turning": 0.726,
+      "wig_wag": 0.395
+    },
+    "min_margin": 0.105,
+    "time_s": 25.266666412353516
+  },
+  {
+    "window_id": 91,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.257,
+      "scrunching": 0.269,
+      "turning": 0.524,
+      "wig_wag": 0.237
+    },
+    "min_margin": 0.024,
+    "time_s": 30.0
+  },
+  {
+    "window_id": 92,
+    "model_pred": "turning",
+    "model_proba": {
+      "gliding": 0.31,
+      "scrunching": 0.249,
+      "turning": 0.763,
+      "wig_wag": 0.2
+    },
+    "min_margin": 0.19,
+    "time_s": 34.400001525878906
+  }
+]
