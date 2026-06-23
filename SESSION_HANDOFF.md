@@ -83,12 +83,34 @@ wobble the position dot.
   degenerates. Centroid-relative matching is jump-invariant; residual head
   reversals 2->0 on the validated clip. Confirmed visually 2026-06-22.
 
-### Open item (the real gap): NO white-7MP behavior labels
-Both classifiers run but neither is validated on this rig. The S3-trained
-classifier is out-of-distribution here (labels 83% gliding vs the rule's
-37% after the midline upgrade) -- same cross-rig shift as the localizer. To
-trust behavior output on white-7MP: blind-label behavior on the tracked clips,
-then validate/retrain. This is the recommended next step.
+### Behavior model VALIDATED + retrained on white-7MP (2026-06-23)
+- Built a blind label set: tracked all 15 go-to clips into one
+  `realtime_runs/white7mp_signals.npz` (27441 frames, 100% curved midline), then
+  `behavior_label_tool.py sample --n 130 --window_s 3` -> 126 windows stratified
+  18/behavior, in `realtime_runs/white7mp_labels_blind/` (manifest + hidden rule
+  preds tracked; `human_labels.csv` tracked).
+- Labeled all 126 blind. Distribution: gliding 87, wig_wag 27, turning 23,
+  scrunching 5; ZERO resting/peristalsis/reversing (the rule's rare predictions
+  were systematically wrong on this rig).
+- Rule classifier vs blind labels (`behavior_accuracy.py`): 21% / macro-F1
+  0.208 (low, expected -- sample is balanced by rule pred, adversarial to it).
+- Retrained RandomForest (`behavior_classifier.py`, LOO-CV): macro-F1 0.681 /
+  micro-F1 0.811. gliding F1 0.94, wig_wag 0.75, turning 0.43, scrunch 0.60.
+  3.3x the rule; first behavior model validated ON this rig (not borrowed S3).
+  Saved `realtime_runs/behavior_clf_white7mp.joblib` (gitignored, regenerable).
+- NOTE during labeling: the label GUI playback was choppy (wall-clock frame
+  indexing skipped frames under load + near-native crop render). Fixed in
+  `behavior_label_tool.py` (paced one-frame-per-period + tiny persistent display
+  buffer; new --disp_w). Source clips are clean 30fps (verified all 15).
+
+### Next levers (behavior)
+- turning F1 is the weak spot (0.43) -- gliding/turning overlap; more turning
+  labels or better heading features would help. scrunch has only 5 examples.
+- A few clips still show 1-8 residual head-flips (position-jump frames); only
+  affects features on those windows. Tighten the position jitter (speed gate)
+  if it matters.
+- Apply `behavior_clf_white7mp.joblib` across full clips for habituation/
+  pharmacology readouts (see `habituation_analysis.py`, `infer_video.py`).
 
 ## Then (priority order)
 1. **Cross-rig generalization**: the white-7MP model is rig-specific (eval
