@@ -109,6 +109,112 @@ def cmd_sample(args):
           f"--manifest_dir {args.out_dir}")
 
 
+# ── active-learning sample ─────────────────────────────────────────────
+def cmd_active(args):
+    """Pick the NEXT labeling batch with the trained model, not the rule.
+
+    Two acquisition signals, because random/rule-stratified sampling wastes
+    labels on easy gliding:
+      - UNCERTAINTY: windows near the model's decision boundary (some class
+        probability close to 0.5) -- the gliding/turning confusions where a label
+        is most informative.
+      - RARE-CLASS coverage: windows the model thinks are likely turning/scrunch
+        (the starved classes), so the next round actually grows them.
+    Already-labeled windows are excluded and a minimum center spacing is enforced
+    so we don't relabel near-duplicate windows.
+    """
+    import joblib
+    from collections import defaultdict, Counter
+
+    sig = load_signals(args.signals)
+    art = joblib.load(args.model)
+    model, FEATURES, classes = art["model"], art["features"], art["classes"]
+    window_s = float(art.get("window_s", args.window_s))
+
+    feats = compute_features(sig, window_s)
+    video = feats["_video"]
+    nf = np.asarray(sig["native_frame"])
+    cx = np.asarray(sig["cx_px"]); cy = np.asarray(sig["cy_px"])
+    lost = np.asarray(sig["lost"])
+    fps = float(sig["fps"]) if "fps" in sig else 30.0
+    half = int(round(window_s * fps / 2))
+    min_gap = int(round(args.min_gap_s * fps))
+
+    X = np.column_stack([feats[k] for k in FEATURES])
+    ok = np.all(np.isfinite(X), axis=1) & (lost == 0) & ~np.isnan(cx)
+    proba = np.zeros((len(X), len(classes)))
+    proba[ok] = model.predict_proba(X[ok])   # proba[ok] is NaN-free
+
+    # Uncertainty = closeness of the nearest class probability to 0.5 (small =
+    # on the fence). Rare-score = max prob among the starved target classes.
+    # Computed only on valid rows (selection draws from `ok` anyway).
+    margin = np.full(len(X), np.inf)
+    margin[ok] = np.min(np.abs(proba[ok] - 0.5), axis=1)   # small -> uncertain
+    rare_idx = [classes.index(c) for c in args.rare if c in classes]
+    rare_score = np.zeros(len(X))
+    if rare_idx:
+        rare_score[ok] = np.max(proba[ok][:, rare_idx], axis=1)
+    top = np.full(len(X), -1)
+    top[ok] = np.argmax(proba[ok], axis=1)
+
+    # Exclude windows near anything already labeled (per clip).
+    taken = defaultdict(list)
+    if args.exclude_manifest_dir:
+        ex = json.load(open(os.path.join(args.exclude_manifest_dir, "manifest.json")))
+        for w in ex["windows"]:
+            taken[w["video"]].append(int(w["center_frame"]))
+
+    def far_enough(v, f):
+        return all(abs(f - c) >= min_gap for c in taken[v])
+
+    cand = np.where(ok)[0]
+
+    def greedy(order, budget):
+        picked = []
+        for i in order:
+            if len(picked) >= budget:
+                break
+            v, f = str(video[i]), int(nf[i])
+            if not far_enough(v, f):
+                continue
+            taken[v].append(f); picked.append(i)
+        return picked
+
+    # Split the budget: half rare-class coverage, half pure uncertainty.
+    n_rare = args.n // 2
+    rare_order = sorted(cand, key=lambda i: -rare_score[i])
+    unc_order = sorted(cand, key=lambda i: margin[i])
+    chosen = greedy(rare_order, n_rare)
+    chosen += greedy(unc_order, args.n - len(chosen))
+    chosen = sorted(set(chosen))
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    manifest, hidden = [], []
+    for wid, i in enumerate(chosen):
+        v = str(video[i]); f0 = int(nf[i])
+        manifest.append({"window_id": wid, "video": v, "center_frame": f0,
+                         "start_frame": max(0, f0 - half), "end_frame": f0 + half,
+                         "cx": float(cx[i]), "cy": float(cy[i])})
+        pr = {classes[j]: round(float(proba[i, j]), 3) for j in range(len(classes))}
+        hidden.append({"window_id": wid,
+                       "model_pred": classes[int(top[i])] if top[i] >= 0 else "unknown",
+                       "model_proba": pr, "min_margin": round(float(margin[i]), 3),
+                       "time_s": float(feats["_time_s"][i])})
+
+    with open(os.path.join(args.out_dir, "manifest.json"), "w") as f:
+        json.dump({"window_s": window_s, "clips_dir": args.clips_dir, "fps": fps,
+                   "windows": manifest}, f, indent=2)
+    with open(os.path.join(args.out_dir, "predictions_hidden.json"), "w") as f:
+        json.dump(hidden, f, indent=2)
+
+    c = Counter(h["model_pred"] for h in hidden)
+    print(f"Active-sampled {len(manifest)} windows ({window_s}s) -> {args.out_dir}")
+    print(f"  model-pred mix (HIDDEN): {dict(sorted(c.items()))}")
+    print(f"  median min-margin of picks: {np.median([h['min_margin'] for h in hidden]):.3f} "
+          f"(lower = more uncertain)")
+    print(f"Now label:  python behavior_label_tool.py label --manifest_dir {args.out_dir}")
+
+
 # ── label GUI ─────────────────────────────────────────────────────────
 def _crop(frame, cx, cy, size):
     h, w = frame.shape[:2]
@@ -331,6 +437,23 @@ def main():
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--out_dir", required=True)
     s.set_defaults(func=cmd_sample)
+
+    a = sub.add_parser("active", help="Pick the next batch by model uncertainty "
+                                      "+ rare-class coverage (active learning).")
+    a.add_argument("--signals", required=True)
+    a.add_argument("--model", required=True, help="trained behavior_clf joblib")
+    a.add_argument("--clips_dir", required=True)
+    a.add_argument("--n", type=int, default=120)
+    a.add_argument("--window_s", type=float, default=3.0,
+                   help="fallback if the model joblib lacks window_s")
+    a.add_argument("--rare", nargs="*", default=["turning", "scrunching"],
+                   help="starved classes to over-sample")
+    a.add_argument("--min_gap_s", type=float, default=4.0,
+                   help="min spacing (s) between picked window centers per clip")
+    a.add_argument("--exclude_manifest_dir", default=None,
+                   help="manifest dir whose windows are already labeled (skip near them)")
+    a.add_argument("--out_dir", required=True)
+    a.set_defaults(func=cmd_active)
 
     l = sub.add_parser("label", help="Blind labeling GUI.")
     l.add_argument("--manifest_dir", required=True)
