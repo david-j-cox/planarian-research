@@ -114,12 +114,16 @@ DEFINITIONS, not the model (RF is right at this size). Levers pursued:
 2. ETHOGRAM (`docs/behavior_ethogram.md`) -- measurable per-gait definitions,
    explicit gliding-vs-turning boundary (the main label-noise source). Use it
    for the next labeling round; consider a 2nd-labeler inter-rater check.
-3. ACTIVE LEARNING (`behavior_label_tool.py active`) -- next batch in
-   `realtime_runs/white7mp_labels_active/` (95 windows, median margin 0.126,
-   16 turning-boundary cases). LABEL THIS NEXT:
-     python behavior_label_tool.py label --manifest_dir ../realtime_runs/white7mp_labels_active
-   then merge with the first 126 and retrain (point classifier at a combined
-   signals+labels set, or run on each and concat).
+3. ACTIVE LEARNING (`behavior_label_tool.py active`) -- DONE round 2: labeled
+   the 95-window batch, merged to 221 via `merge_label_sets.py`
+   (`white7mp_labels_combined`), retrained. Active learning enriched the hard
+   classes (turning 23->48, scrunch 5->15). Combined RF LOO-CV (4 classes,
+   min_support=5): macro-F1 0.637; TURNING 0.43->0.53 (the targeted gain),
+   gliding 0.90, wig_wag 0.72, scrunch 0.40. Macro looks flat vs the first
+   batch's 0.681 only because the combined set is harder/representative (active
+   learning adds boundary cases) -- 0.637 is the more trustworthy estimate.
+   The label->train->active->label loop is reproducible; run it again for more
+   turning/scrunch. Tool now has an 'x' no-worm skip + resume-at-first-unlabeled.
 
 ### Still open
 - scrunch/peristalsis/reversing are scarce in this baseline session -- they are
