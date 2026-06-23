@@ -29,7 +29,7 @@ FEATURES = ["speed_mm_s", "disp_mm", "head_osc_deg", "head_reversals",
             "ang_vel_p90_deg_s", "path_curv_deg_mm", "body_curv_deg"]
 
 
-def build_dataset(signals, blind_dir):
+def build_dataset(signals, blind_dir, min_support=1):
     man = json.load(open(os.path.join(blind_dir, "manifest.json")))
     window_s = float(man.get("window_s", 3.0))
     windows = {w["window_id"]: w for w in man["windows"]}
@@ -45,17 +45,24 @@ def build_dataset(signals, blind_dir):
     video = np.asarray([str(v) for v in sig["video"]])
     nframe = np.asarray(sig["native_frame"]).astype(int)
 
-    # "no_worm" marks unusable windows (detection failure / dish edge); drop them
-    # and never let them become a class.
+    # "no_worm"/"unknown" mark unusable windows; never let them be a class. Also
+    # drop classes with too few examples to learn (they only emit F1=0 and warn);
+    # a window left with no kept label is skipped.
     SKIP = {"no_worm", "unknown"}
-    classes = sorted({b for bs in labels.values() for b in bs} - SKIP)
+    from collections import Counter
+    counts = Counter(b for bs in labels.values() for b in (bs - SKIP))
+    classes = sorted(b for b, c in counts.items() if c >= min_support)
+    dropped = sorted(f"{b}({c})" for b, c in counts.items() if c < min_support)
+    if dropped:
+        print(f"dropped under-supported classes (<{min_support}): {dropped}")
+    keep = set(classes)
     X, Y, rule, wids = [], [], [], []
     rule_pred = {p["window_id"]: p.get("rule_pred", p.get("model_pred", "unknown"))
                  for p in json.load(open(os.path.join(blind_dir, "predictions_hidden.json")))}
 
     for wid, behs in sorted(labels.items()):
-        behs = behs - SKIP
-        if not behs:                       # unusable / empty window: skip
+        behs = (behs - SKIP) & keep
+        if not behs:                       # unusable / only-rare-class: skip
             continue
         w = windows[wid]
         m = (video == w["video"]) & (nframe == int(w["center_frame"]))
@@ -78,6 +85,8 @@ def main():
     ap.add_argument("--signals", default=os.path.join(here, "..", "realtime_runs", "S3_signals.npz"))
     ap.add_argument("--blind_dir", default=os.path.join(here, "..", "realtime_runs", "S3_labels_blind"))
     ap.add_argument("--out", default=os.path.join(here, "..", "realtime_runs", "behavior_clf.joblib"))
+    ap.add_argument("--min_support", type=int, default=5,
+                    help="drop behavior classes with fewer than this many labeled windows")
     a = ap.parse_args()
 
     from sklearn.ensemble import RandomForestClassifier
@@ -89,7 +98,7 @@ def main():
     from sklearn.metrics import f1_score, precision_score, recall_score
     import joblib
 
-    X, Y, classes, rule, wids, window_s = build_dataset(a.signals, a.blind_dir)
+    X, Y, classes, rule, wids, window_s = build_dataset(a.signals, a.blind_dir, a.min_support)
     print(f"dataset: {X.shape[0]} windows, {X.shape[1]} features, {len(classes)} classes")
     print(f"classes: {classes}")
     print(f"label support: " + "  ".join(f"{c}={int(Y[:,j].sum())}" for j, c in enumerate(classes)))
