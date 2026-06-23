@@ -25,7 +25,8 @@ from behavior_features import load_signals, compute_features
 
 FEATURES = ["speed_mm_s", "disp_mm", "head_osc_deg", "head_reversals",
             "bodylen_cv", "bodylen_cycles", "bodylen_contract",
-            "heading_change_deg", "frac_lost"]
+            "heading_change_deg", "frac_lost",
+            "ang_vel_p90_deg_s", "path_curv_deg_mm", "body_curv_deg"]
 
 
 def build_dataset(signals, blind_dir):

@@ -46,6 +46,8 @@ MAX_SPEED_MM_S = 7.0   # cap instantaneous speed (matches filter_jumps; see that
 # rejecting the sub-threshold jitter a near-flat resting signal produces.
 HEAD_MIN_SWING_DEG = 8.0       # head must swing >8 deg to count a wigwag reversal
 BODYLEN_MIN_SWING_FRAC = 0.05  # body length must change >5% to count a length cycle
+MIN_PATH_SPEED_MM_S = 0.3      # path-curvature ignores steps slower than this
+                               # (sub-pixel steps have jitter-dominated direction)
 
 
 def load_signals(npz_path):
@@ -111,20 +113,29 @@ def compute_features(sig, window_s=1.0):
     feats = {k: np.full(n, np.nan, np.float64) for k in (
         "speed_mm_s", "disp_mm", "head_osc_deg", "head_reversals",
         "bodylen_cv", "bodylen_cycles", "bodylen_contract",
-        "heading_change_deg", "frac_lost")}
+        "heading_change_deg", "frac_lost",
+        # motion-dynamics features (target turning / scrunch separation)
+        "ang_vel_p90_deg_s", "path_curv_deg_mm", "body_curv_deg")}
 
-    # Body heading from the midline (tail->head vector), per frame.
+    # Per-frame body heading (tail->head vector) and body curvature, from midline.
     ml = np.asarray(sig["midline"], dtype=np.float64)  # (N, mp, 2)
     heading = np.full(n, np.nan)
+    bodycurv = np.full(n, np.nan)                       # total body bend (deg)
     for i in range(n):
         if lost[i]:
             continue
         p = ml[i]
         good = ~np.isnan(p[:, 0])
-        if good.sum() >= 2:
-            idx = np.where(good)[0]
+        idx = np.where(good)[0]
+        if len(idx) >= 2:
             hv = p[idx[0]] - p[idx[-1]]   # head - tail
             heading[i] = np.degrees(np.arctan2(hv[1], hv[0]))
+        if len(idx) >= 3:
+            # Sum of absolute turning between consecutive midline segments: a
+            # straight worm ~0, a bent/curling (turning, scrunch) worm is large.
+            segs = np.diff(p[idx], axis=0)
+            sa = np.degrees(np.arctan2(segs[:, 1], segs[:, 0]))
+            bodycurv[i] = float(np.sum(np.abs(_angdiff(sa[1:], sa[:-1]))))
 
     # Process each clip's frames independently (preserve order).
     for vid in np.unique(video):
@@ -137,6 +148,10 @@ def compute_features(sig, window_s=1.0):
             feats["frac_lost"][i] = 1.0 - len(det) / len(w)
             if len(det) < 2:
                 continue
+            # finite defaults so a degenerate sub-computation never drops the row
+            feats["ang_vel_p90_deg_s"][i] = 0.0
+            feats["path_curv_deg_mm"][i] = 0.0
+            feats["body_curv_deg"][i] = 0.0
 
             # --- centroid kinematics ---
             wx, wy, wt = cx[det], cy[det], t[det]
@@ -169,11 +184,40 @@ def compute_features(sig, window_s=1.0):
                 rev, _ = _gated_oscillations(bw, BODYLEN_MIN_SWING_FRAC * mean_b)
                 feats["bodylen_cycles"][i] = rev / 2.0        # half-cycles -> cycles
 
-            # --- heading change (turning) ---
-            hd = heading[det]
-            hd = hd[~np.isnan(hd)]
-            if len(hd) >= 2:
-                feats["heading_change_deg"][i] = abs(float(_angdiff(hd[-1], hd[0])))
+            # --- heading change + turning dynamics ---
+            hd = heading[det]; htd = t[det]
+            gv = ~np.isnan(hd)
+            if gv.sum() >= 2:
+                hh, tt = hd[gv], htd[gv]
+                feats["heading_change_deg"][i] = abs(float(_angdiff(hh[-1], hh[0])))
+                # Turning RATE (deg/s): unlike net heading change it doesn't cancel
+                # when the worm turns then back. Use the 90th percentile, not the
+                # max, so a single jitter/flip frame doesn't define it.
+                dts2 = np.diff(tt)
+                dh = np.abs(_angdiff(hh[1:], hh[:-1]))
+                rate = np.divide(dh, dts2, out=np.zeros_like(dh), where=dts2 > 0)
+                if len(rate):
+                    feats["ang_vel_p90_deg_s"][i] = float(np.percentile(rate, 90))
+
+            # --- path curvature (curving glide = turning vs straight glide) ---
+            # Only over steps where the worm REALLY moved: at sub-pixel speed the
+            # step direction is jitter, which otherwise dominates this feature.
+            if len(det) >= 3:
+                steps = np.column_stack([np.diff(cx[det]), np.diff(cy[det])])
+                seglen = np.hypot(steps[:, 0], steps[:, 1])
+                min_step_px = (MIN_PATH_SPEED_MM_S / fps) / mmpp
+                mv = seglen >= min_step_px
+                if mv.sum() >= 2:
+                    sa = np.degrees(np.arctan2(steps[mv, 1], steps[mv, 0]))
+                    turn = float(np.sum(np.abs(_angdiff(sa[1:], sa[:-1]))))
+                    plen_mm = float(np.sum(seglen[mv]) * mmpp)
+                    if plen_mm > 1e-6:
+                        feats["path_curv_deg_mm"][i] = turn / plen_mm
+
+            # --- body curvature (bent body: turning / scrunch) ---
+            bc = bodycurv[det]; bc = bc[~np.isnan(bc)]
+            if len(bc):
+                feats["body_curv_deg"][i] = float(np.mean(bc))
 
     feats["_video"] = video
     feats["_time_s"] = t
@@ -194,7 +238,8 @@ def main():
     print(f"{n} frames, window {args.window_s}s. Feature summary (median / 90th pct):")
     for k in ("speed_mm_s", "disp_mm", "head_osc_deg", "head_reversals",
               "bodylen_cv", "bodylen_cycles", "bodylen_contract",
-              "heading_change_deg", "frac_lost"):
+              "heading_change_deg", "frac_lost",
+              "ang_vel_p90_deg_s", "path_curv_deg_mm", "body_curv_deg"):
         v = f[k][~np.isnan(f[k])]
         if len(v):
             print(f"  {k:20s} {np.median(v):8.3f} / {np.percentile(v,90):8.3f}")
