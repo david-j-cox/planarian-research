@@ -266,7 +266,16 @@ def cmd_label(args):
     def load_window(wm):
         # Seek ONCE to the window start, then read sequentially. Re-seeking every
         # frame (the old way) forced a keyframe decode per frame — the 10-15s lag.
+        #
+        # DROP exact-duplicate consecutive frames. The source MKVs contain padded
+        # duplicate frames (the high-res capture can't sustain a true 30fps, so
+        # OBS repeats frames to fill the timeline) -- runs of up to ~6 identical
+        # frames make a MOVING worm look frozen-then-jump. We keep only frames
+        # whose full image actually changed, so playback shows real motion. A
+        # resting worm is unaffected (sensor noise makes its frames non-identical;
+        # only byte-identical padded frames are dropped).
         frames = []
+        prev_sig = None
         with _cap_lock:
             cap = _get_cap(wm["video"])
             cap.set(cv2.CAP_PROP_POS_FRAMES, wm["start_frame"])
@@ -274,6 +283,10 @@ def cmd_label(args):
                 ok, img = cap.read()
                 if not ok:
                     break
+                sig = cv2.resize(img, (160, 100)).astype(np.int16)
+                if prev_sig is not None and not np.any(sig - prev_sig):
+                    continue                       # exact padded duplicate -> skip
+                prev_sig = sig
                 c = _crop(img, wm["cx"], wm["cy"], crop_size)
                 s = min(1.0, disp_w / max(1, c.shape[1]))
                 frames.append(cv2.resize(
