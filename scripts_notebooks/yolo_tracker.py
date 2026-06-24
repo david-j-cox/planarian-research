@@ -90,35 +90,45 @@ def box_morphology(frame, bg, box, pos, prev_midline, pad=0.35, n_points=MIDLINE
 
     Fallback (skeleton too short / fails): a straight PCA axis anchored THROUGH
     the YOLO position, same as before -- always yields a head/tail so the track
-    never has a hole. Returns (midline_pts, head, tail, blen_px); midline_pts is
-    an ordered (k,2) array (>=2 rows) or None only when there is no foreground.
+    never has a hole.
+
+    Also returns the worm's PIXEL CENTROID (mean of the worm's largest contour),
+    which is far more stable than the YOLO box center -- the box center wobbles
+    ~0.13 mm/s frame-to-frame even on a still worm; the pixel centroid is ~0.02.
+    Returns (centroid, midline_pts, head, tail, blen_px); centroid/midline are
+    None only when there is no usable foreground.
     """
     th, origin = _box_foreground(frame, bg, box, pad)
     if th is None:
-        return None, None, None, np.nan
+        return None, None, None, None, np.nan
     rx0, ry0 = origin
     cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     if not cnts:
-        return None, None, None, np.nan
+        return None, None, None, None, np.nan
     cnt = max(cnts, key=cv2.contourArea) + np.array([rx0, ry0])   # -> full-frame
+
+    M = cv2.moments(cnt)
+    centroid = ([M["m10"] / M["m00"], M["m01"] / M["m00"]]
+                if M["m00"] > 0 else list(pos))
 
     midline, _curv, blen = extract_midline(cnt, prev_midline, n_points, frame.shape)
     if midline is not None and len(midline) >= 3:
         head = midline[0].tolist()
         tail = midline[-1].tolist()
-        return np.asarray(midline, np.float32), head, tail, float(blen)
+        return centroid, np.asarray(midline, np.float32), head, tail, float(blen)
 
     # Fallback: straight PCA axis through the YOLO position.
     ys, xs = np.where(th > 0)
     if len(xs) < 5:
-        return None, None, None, np.nan
+        return None, None, None, None, np.nan
     pts = np.column_stack([xs + rx0, ys + ry0]).astype(np.float32)
     d = pts - pts.mean(0)
     axis = np.linalg.eigh((d.T @ d) / len(d))[1][:, -1]
     proj = (pts - np.asarray(pos, np.float32)) @ axis
     head = (np.asarray(pos) + axis * proj.max()).tolist()
     tail = (np.asarray(pos) + axis * proj.min()).tolist()
-    return np.asarray([head, tail], np.float32), head, tail, float(proj.max() - proj.min())
+    return (centroid, np.asarray([head, tail], np.float32), head, tail,
+            float(proj.max() - proj.min()))
 
 
 def _thirds(ml):
@@ -231,10 +241,13 @@ def track(video, model, mm_per_px, conf=0.10, imgsz=1024, device="mps", min_area
         det = yolo_box_in_dish(r, dish)
         if det is not None:
             bx, by, box, cf = det
-            ml, h, t, blen = box_morphology(frame, bg, box, (bx, by), prev_midline)
+            centroid, ml, h, t, blen = box_morphology(frame, bg, box, (bx, by), prev_midline)
             if ml is not None and len(ml) >= 3:
                 prev_midline = ml   # only the curved midline seeds H/T consistency
-            raw.append({"cx": bx, "cy": by, "box": box, "conf": cf,
+            # Position = worm pixel centroid (stable), not the wobbly box center;
+            # fall back to box center if no foreground this frame.
+            px, py = (centroid if centroid is not None else (bx, by))
+            raw.append({"cx": px, "cy": py, "box": box, "conf": cf,
                         "midline": ml, "head": h, "tail": t, "blen": blen})
         else:
             raw.append({"cx": np.nan, "cy": np.nan, "box": None, "conf": 0.0,
@@ -242,7 +255,10 @@ def track(video, model, mm_per_px, conf=0.10, imgsz=1024, device="mps", min_area
     cap.release()
 
     xs = np.array([r["cx"] for r in raw]); ys = np.array([r["cy"] for r in raw])
-    cx, cy, keep = ft.hampel_clean(xs, ys, fps, mm_per_px)
+    # Stricter floor than the fusion default (5x): the blob-centroid position is
+    # stable (~0.02 mm/s), so a tight gate (~2x physical max) catches the gross
+    # rim-jump outliers without touching real motion.
+    cx, cy, keep = ft.hampel_clean(xs, ys, fps, mm_per_px, floor_mult=2.0, abs_floor=20.0)
 
     # Global head/tail orientation from velocity (replaces fragile chaining).
     oriented, nflip = orient_midlines([r["midline"] for r in raw], cx, cy, fps, mm_per_px)

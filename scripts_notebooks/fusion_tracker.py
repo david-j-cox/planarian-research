@@ -99,7 +99,7 @@ def pca_axis(contour):
 
 
 # ── shared temporal cleanup ───────────────────────────────────────────
-def hampel_clean(xs, ys, fps, mm_per_px, win=7):
+def hampel_clean(xs, ys, fps, mm_per_px, win=7, floor_mult=5.0, abs_floor=40.0):
     """Safe temporal pass shared by the trackers: flag points farther from
     their local median (window `win`) than a worm could travel at MAX_SPEED
     (Hampel spike rejection), then interpolate the rejected/missing points and
@@ -109,7 +109,7 @@ def hampel_clean(xs, ys, fps, mm_per_px, win=7):
     n = len(xs)
     valid = np.isfinite(xs)
     idx = np.arange(n)
-    floor_px = max(MAX_SPEED_MM_S / fps / mm_per_px * 5.0, 40.0)
+    floor_px = max(MAX_SPEED_MM_S / fps / mm_per_px * floor_mult, abs_floor)
     flagged = np.zeros(n, bool)
     for i in range(n):
         if not valid[i]:
