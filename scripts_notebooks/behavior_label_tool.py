@@ -51,6 +51,8 @@ LABELABLE = [b for b in BEHAVIORS if b != "unknown"]  # human picks a real behav
 DISP_MAX_W = 900
 NO_WORM = "no_worm"   # window has no/unusable worm (detection failure, dish edge);
                       # recorded so it can be advanced past, dropped downstream
+FROZEN = "frozen"     # window is CORRUPT capture (frozen frames + teleport, motion
+                      # lost); marked for removal, dropped from training/accuracy
 
 
 # ── sample ────────────────────────────────────────────────────────────
@@ -351,7 +353,7 @@ def cmd_label(args):
               if w["window_id"] not in done), 0)
     # Bottom panel sized to fit the title + one-behavior-per-line menu + footer,
     # so nothing is ever clipped regardless of crop size.
-    menu_h = 40 + len(LABELABLE) * 30 + 114
+    menu_h = 40 + len(LABELABLE) * 30 + 136
     speed = args.speed   # live playback-speed multiplier (slow-mo for fast gaits)
     while 0 <= i < n:
         wm = windows[i]
@@ -390,8 +392,10 @@ def cmd_label(args):
             _put(strip, f"speed {speed:.2f}x  ( - slower / = faster )", (12, y), 0.5,
                  (0, 200, 200))
             y += 24
-            _put(strip, "1-7 toggle  n/SPACE next  x no-worm  b back  u clear  r replay  q quit",
+            _put(strip, "1-7 toggle  n/SPACE next  f FROZEN/corrupt  x no-worm  b back",
                  (12, y), 0.5, (180, 180, 180))
+            y += 22
+            _put(strip, "u clear   r replay   q save+quit", (12, y), 0.5, (180, 180, 180))
 
         draw_strip()
         fi = 0
@@ -437,6 +441,12 @@ def cmd_label(args):
                 # No worm / unusable window (detection failure, dish edge).
                 # Recorded as NO_WORM and dropped from training + accuracy.
                 done[wm["window_id"]] = {NO_WORM}
+                i += 1
+                break
+            elif k == ord('f'):
+                # CORRUPT capture (frozen frames / teleport). Mark for removal,
+                # advance. Dropped from training + accuracy downstream.
+                done[wm["window_id"]] = {FROZEN}
                 i += 1
                 break
             elif k == ord('r'):

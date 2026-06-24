@@ -65,7 +65,7 @@ def build_dataset(signals, blind_dir, min_support=1, max_jump_mm_s=50.0):
     # "no_worm"/"unknown" mark unusable windows; never let them be a class. Also
     # drop classes with too few examples to learn (they only emit F1=0 and warn);
     # a window left with no kept label is skipped.
-    SKIP = {"no_worm", "unknown"}
+    SKIP = {"no_worm", "unknown", "frozen"}   # unusable/corrupt windows: never a class
     from collections import Counter
     counts = Counter(b for bs in labels.values() for b in (bs - SKIP))
     classes = sorted(b for b, c in counts.items() if c >= min_support)

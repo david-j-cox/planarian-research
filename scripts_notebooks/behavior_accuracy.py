@@ -32,7 +32,7 @@ def main():
                 for h in json.load(f)}
     # human labels are SETS (';'-joined). The predictor emits ONE behavior per
     # window, so its "set" is a singleton. Scoring is per-behavior present/absent.
-    SKIP = {"no_worm", "unknown"}   # unusable windows: not scored
+    SKIP = {"no_worm", "unknown", "frozen"}   # unusable/corrupt windows: not scored
     human = {}
     lp = os.path.join(md, "human_labels.csv")
     if not os.path.exists(lp):
