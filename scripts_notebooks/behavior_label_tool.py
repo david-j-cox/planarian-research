@@ -351,8 +351,8 @@ def cmd_label(args):
               if w["window_id"] not in done), 0)
     # Bottom panel sized to fit the title + one-behavior-per-line menu + footer,
     # so nothing is ever clipped regardless of crop size.
-    menu_h = 40 + len(LABELABLE) * 30 + 64
-    frame_period = 1.0 / fps
+    menu_h = 40 + len(LABELABLE) * 30 + 114
+    speed = args.speed   # live playback-speed multiplier (slow-mo for fast gaits)
     while 0 <= i < n:
         wm = windows[i]
         frames = get_frames(i)
@@ -386,7 +386,10 @@ def cmd_label(args):
             cur = " + ".join(sorted(sel)) if sel else "(none)"
             _put(strip, "SELECTED: " + cur, (12, y), 0.6,
                  (0, 255, 0) if sel else (0, 0, 255))
-            y += 28
+            y += 26
+            _put(strip, f"speed {speed:.2f}x  ( - slower / = faster )", (12, y), 0.5,
+                 (0, 200, 200))
+            y += 24
             _put(strip, "1-7 toggle  n/SPACE next  x no-worm  b back  u clear  r replay  q quit",
                  (12, y), 0.5, (180, 180, 180))
 
@@ -407,6 +410,7 @@ def cmd_label(args):
             # Advance one frame per period; waitKey absorbs the remaining time so
             # playback holds true fps and, under load, slows EVENLY (no skips).
             now = _time.monotonic()
+            frame_period = (1.0 / fps) / max(0.1, speed)   # live speed control
             delay = max(1, int((next_t + frame_period - now) * 1000))
             k = cv2.waitKey(delay) & 0xFF
             next_t += frame_period
@@ -437,6 +441,10 @@ def cmd_label(args):
                 break
             elif k == ord('r'):
                 fi = 0; step = 1; next_t = _time.monotonic()
+            elif k in (ord('-'), ord('_')):
+                speed = max(0.1, round(speed - 0.25, 2)); draw_strip()
+            elif k in (ord('='), ord('+')):
+                speed = min(3.0, round(speed + 0.25, 2)); draw_strip()
             elif k == ord('b'):
                 if sel:
                     done[wm["window_id"]] = set(sel)
@@ -530,6 +538,9 @@ def main():
     l.add_argument("--disp_w", type=int, default=560,
                    help="display width the crop is scaled to; smaller plays "
                         "smoother (decoupled from crop_px)")
+    l.add_argument("--speed", type=float, default=0.5,
+                   help="playback speed multiplier; <1 = slow-mo so fast body "
+                        "contractions (scrunch/peristalsis) are visible. Live keys -/=")
     l.set_defaults(func=cmd_label)
 
     args = ap.parse_args()
