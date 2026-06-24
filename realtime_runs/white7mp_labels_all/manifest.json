@@ -3044,6 +3044,303 @@
       "end_frame": 830,
       "cx": 1860.91552734375,
       "cy": 1849.5625
+    },
+    {
+      "window_id": 338,
+      "video": "2026-06-02_15-01-32.mkv",
+      "center_frame": 971,
+      "start_frame": 926,
+      "end_frame": 1016,
+      "cx": 1475.87548828125,
+      "cy": 1931.81005859375
+    },
+    {
+      "window_id": 339,
+      "video": "2026-06-02_15-01-32.mkv",
+      "center_frame": 1476,
+      "start_frame": 1431,
+      "end_frame": 1521,
+      "cx": 821.066650390625,
+      "cy": 1354.203369140625
+    },
+    {
+      "window_id": 340,
+      "video": "2026-06-02_15-01-32.mkv",
+      "center_frame": 1674,
+      "start_frame": 1629,
+      "end_frame": 1719,
+      "cx": 765.306396484375,
+      "cy": 913.8741455078125
+    },
+    {
+      "window_id": 341,
+      "video": "2026-06-02_15-01-32.mkv",
+      "center_frame": 1809,
+      "start_frame": 1764,
+      "end_frame": 1854,
+      "cx": 810.6721801757812,
+      "cy": 748.4398193359375
+    },
+    {
+      "window_id": 342,
+      "video": "2026-06-02_15-01-32.mkv",
+      "center_frame": 1953,
+      "start_frame": 1908,
+      "end_frame": 1998,
+      "cx": 810.7152709960938,
+      "cy": 749.0604248046875
+    },
+    {
+      "window_id": 343,
+      "video": "2026-06-02_15-02-47.mkv",
+      "center_frame": 218,
+      "start_frame": 173,
+      "end_frame": 263,
+      "cx": 1039.168701171875,
+      "cy": 478.894287109375
+    },
+    {
+      "window_id": 344,
+      "video": "2026-06-02_15-02-47.mkv",
+      "center_frame": 603,
+      "start_frame": 558,
+      "end_frame": 648,
+      "cx": 699.8594970703125,
+      "cy": 1139.767333984375
+    },
+    {
+      "window_id": 345,
+      "video": "2026-06-02_15-02-47.mkv",
+      "center_frame": 951,
+      "start_frame": 906,
+      "end_frame": 996,
+      "cx": 1212.337158203125,
+      "cy": 1821.7784423828125
+    },
+    {
+      "window_id": 346,
+      "video": "2026-06-02_15-02-47.mkv",
+      "center_frame": 1695,
+      "start_frame": 1650,
+      "end_frame": 1740,
+      "cx": 2072.8759765625,
+      "cy": 1358.538818359375
+    },
+    {
+      "window_id": 347,
+      "video": "2026-06-02_15-04-08.mkv",
+      "center_frame": 290,
+      "start_frame": 245,
+      "end_frame": 335,
+      "cx": 804.0465087890625,
+      "cy": 1056.2724609375
+    },
+    {
+      "window_id": 348,
+      "video": "2026-06-02_15-04-08.mkv",
+      "center_frame": 496,
+      "start_frame": 451,
+      "end_frame": 541,
+      "cx": 805.8778076171875,
+      "cy": 1057.092529296875
+    },
+    {
+      "window_id": 349,
+      "video": "2026-06-02_15-04-08.mkv",
+      "center_frame": 616,
+      "start_frame": 571,
+      "end_frame": 661,
+      "cx": 805.4992065429688,
+      "cy": 1056.3143310546875
+    },
+    {
+      "window_id": 350,
+      "video": "2026-06-02_15-04-08.mkv",
+      "center_frame": 796,
+      "start_frame": 751,
+      "end_frame": 841,
+      "cx": 995.94970703125,
+      "cy": 1308.588623046875
+    },
+    {
+      "window_id": 351,
+      "video": "2026-06-02_15-04-08.mkv",
+      "center_frame": 1077,
+      "start_frame": 1032,
+      "end_frame": 1122,
+      "cx": 883.1995849609375,
+      "cy": 1586.8341064453125
+    },
+    {
+      "window_id": 352,
+      "video": "2026-06-02_15-04-08.mkv",
+      "center_frame": 1238,
+      "start_frame": 1193,
+      "end_frame": 1283,
+      "cx": 882.2711181640625,
+      "cy": 1586.487548828125
+    },
+    {
+      "window_id": 353,
+      "video": "2026-06-02_15-04-08.mkv",
+      "center_frame": 1394,
+      "start_frame": 1349,
+      "end_frame": 1439,
+      "cx": 882.3558349609375,
+      "cy": 1588.115478515625
+    },
+    {
+      "window_id": 354,
+      "video": "2026-06-02_15-04-08.mkv",
+      "center_frame": 1517,
+      "start_frame": 1472,
+      "end_frame": 1562,
+      "cx": 863.1762084960938,
+      "cy": 611.001220703125
+    },
+    {
+      "window_id": 355,
+      "video": "2026-06-02_15-04-08.mkv",
+      "center_frame": 1801,
+      "start_frame": 1756,
+      "end_frame": 1846,
+      "cx": 699.9188232421875,
+      "cy": 1085.5555419921875
+    },
+    {
+      "window_id": 356,
+      "video": "2026-06-02_15-05-45.mkv",
+      "center_frame": 299,
+      "start_frame": 254,
+      "end_frame": 344,
+      "cx": 698.8643798828125,
+      "cy": 1085.84033203125
+    },
+    {
+      "window_id": 357,
+      "video": "2026-06-02_15-05-45.mkv",
+      "center_frame": 548,
+      "start_frame": 503,
+      "end_frame": 593,
+      "cx": 2061.98681640625,
+      "cy": 1939.335693359375
+    },
+    {
+      "window_id": 358,
+      "video": "2026-06-02_15-05-45.mkv",
+      "center_frame": 845,
+      "start_frame": 800,
+      "end_frame": 890,
+      "cx": 2525.849853515625,
+      "cy": 1409.792236328125
+    },
+    {
+      "window_id": 359,
+      "video": "2026-06-02_15-05-45.mkv",
+      "center_frame": 994,
+      "start_frame": 949,
+      "end_frame": 1039,
+      "cx": 2525.29248046875,
+      "cy": 1410.892578125
+    },
+    {
+      "window_id": 360,
+      "video": "2026-06-02_15-05-45.mkv",
+      "center_frame": 1243,
+      "start_frame": 1198,
+      "end_frame": 1288,
+      "cx": 2524.768798828125,
+      "cy": 1410.8365478515625
+    },
+    {
+      "window_id": 361,
+      "video": "2026-06-02_15-05-45.mkv",
+      "center_frame": 1389,
+      "start_frame": 1344,
+      "end_frame": 1434,
+      "cx": 2525.492919921875,
+      "cy": 1410.466552734375
+    },
+    {
+      "window_id": 362,
+      "video": "2026-06-02_15-05-45.mkv",
+      "center_frame": 1519,
+      "start_frame": 1474,
+      "end_frame": 1564,
+      "cx": 2525.23779296875,
+      "cy": 1410.6578369140625
+    },
+    {
+      "window_id": 363,
+      "video": "2026-06-02_15-05-45.mkv",
+      "center_frame": 1715,
+      "start_frame": 1670,
+      "end_frame": 1760,
+      "cx": 1443.3349609375,
+      "cy": 253.01931762695312
+    },
+    {
+      "window_id": 364,
+      "video": "2026-06-02_15-07-26.mkv",
+      "center_frame": 35,
+      "start_frame": 0,
+      "end_frame": 80,
+      "cx": 1442.478515625,
+      "cy": 254.2178192138672
+    },
+    {
+      "window_id": 365,
+      "video": "2026-06-02_15-07-26.mkv",
+      "center_frame": 246,
+      "start_frame": 201,
+      "end_frame": 291,
+      "cx": 705.80029296875,
+      "cy": 895.608642578125
+    },
+    {
+      "window_id": 366,
+      "video": "2026-06-02_15-07-26.mkv",
+      "center_frame": 430,
+      "start_frame": 385,
+      "end_frame": 475,
+      "cx": 705.6547241210938,
+      "cy": 896.9039306640625
+    },
+    {
+      "window_id": 367,
+      "video": "2026-06-02_15-07-26.mkv",
+      "center_frame": 580,
+      "start_frame": 535,
+      "end_frame": 625,
+      "cx": 705.39501953125,
+      "cy": 894.759765625
+    },
+    {
+      "window_id": 368,
+      "video": "2026-06-02_15-07-26.mkv",
+      "center_frame": 814,
+      "start_frame": 769,
+      "end_frame": 859,
+      "cx": 705.7972412109375,
+      "cy": 895.7320556640625
+    },
+    {
+      "window_id": 369,
+      "video": "2026-06-02_15-07-26.mkv",
+      "center_frame": 948,
+      "start_frame": 903,
+      "end_frame": 993,
+      "cx": 706.0249633789062,
+      "cy": 894.7059326171875
+    },
+    {
+      "window_id": 370,
+      "video": "2026-06-02_15-07-26.mkv",
+      "center_frame": 1077,
+      "start_frame": 1032,
+      "end_frame": 1122,
+      "cx": 705.32275390625,
+      "cy": 895.4141845703125
     }
   ]
 }
