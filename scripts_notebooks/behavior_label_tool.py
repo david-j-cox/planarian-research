@@ -392,26 +392,33 @@ def cmd_label(args):
 
         draw_strip()
         fi = 0
+        step = 1            # PING-PONG direction: forward then reverse
         next_t = _time.monotonic()
         while True:
             vf = frames[fi]
             disp[:bh, :vf.shape[1]] = vf
-            # Playback heartbeat: a bar that sweeps left->right each 3s loop, so a
-            # perfectly STILL worm (resting) is visibly distinguishable from a
-            # frozen player. Purely a time indicator -> does not bias the blind
-            # behavior call.
+            # Playback heartbeat: a bar that sweeps with playback, so a perfectly
+            # STILL worm (resting) is visibly distinguishable from a frozen
+            # player. Purely a time indicator -> does not bias the blind call.
             prog = int(pw * fi / max(1, nframes - 1))
             disp[0:5, :, :] = 40
             disp[0:5, :prog, :] = (0, 220, 0)
             cv2.imshow(WIN, disp)
-            # Advance exactly one frame per period; waitKey absorbs the remaining
-            # time so playback holds true fps and, under load, slows EVENLY
-            # instead of skipping frames.
+            # Advance one frame per period; waitKey absorbs the remaining time so
+            # playback holds true fps and, under load, slows EVENLY (no skips).
             now = _time.monotonic()
             delay = max(1, int((next_t + frame_period - now) * 1000))
             k = cv2.waitKey(delay) & 0xFF
             next_t += frame_period
-            fi = (fi + 1) % nframes
+            # Ping-pong instead of wrap-around: at a loop wrap the worm teleports
+            # from its end position back to its start (a ~35x single-frame jump
+            # that reads as worm motion). Bouncing forward<->backward removes that
+            # discontinuity; motion stays smooth and is shown both directions.
+            fi += step
+            if fi >= nframes - 1:
+                fi = nframes - 1; step = -1
+            elif fi <= 0:
+                fi = 0; step = 1
             if next_t < now - frame_period:       # fell far behind: resync clock
                 next_t = now
             if ord('1') <= k <= ord('9'):
@@ -429,7 +436,7 @@ def cmd_label(args):
                 i += 1
                 break
             elif k == ord('r'):
-                fi = 0; next_t = _time.monotonic()
+                fi = 0; step = 1; next_t = _time.monotonic()
             elif k == ord('b'):
                 if sel:
                     done[wm["window_id"]] = set(sel)
