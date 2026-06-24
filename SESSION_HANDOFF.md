@@ -125,6 +125,27 @@ DEFINITIONS, not the model (RF is right at this size). Levers pursued:
    The label->train->active->label loop is reproducible; run it again for more
    turning/scrunch. Tool now has an 'x' no-worm skip + resume-at-first-unlabeled.
 
+### Real-time pipeline (built + dry-run-verified 2026-06-24)
+Goal: clips push to Drive 1/min, analyze continuously for a week. Budget: <60s/clip.
+- `rt_dryrun.py` — lean LOCATION+MOVEMENT tracker (YOLO box -> worm blob centroid
+  -> Hampel position+speed; behavior deferred to clean-data retrain) + dry-run/
+  soak harness. Findings (M-series MPS):
+  * Already real-time: baseline ~30s/clip (2x under budget). reuse_bg (fixed rig,
+    build once) + stride2 (YOLO every other frame, ~15fps) -> 11.4s/clip = 5.3x
+    headroom, 0/230 over budget.
+  * imgsz 1024->640 gives NO speedup (YOLO is per-call-overhead-bound, not
+    resolution-bound) -- keep 1024 for accuracy.
+- MEMORY LEAK found by 230-clip soak: +3.4 MB/clip (~36GB/7-day -> crash). NOT
+  YOLO (predict flat). Fix: per-clip reclaim() (gc + mps.empty_cache) halves it;
+  periodic RE-EXEC caps it (OS frees all on exit, resumes via processed-list).
+- `rt_watch.py` — continuous Drive-folder watcher. File-stability gate, resumable
+  (<sid>_processed.txt, CSV appended), reuse_bg, backlog alarm, --restart_every
+  (re-exec, default 200), --delete_after, line-buffered logs. Verified: process +
+  resume + re-exec all work. LIVE CMD:
+    python -u rt_watch.py --watch_dir "$DRIVE/planarian_clips" --session_id worm_run_01
+- STILL TODO for live: supervisor (launchd auto-restart) around it; behavior layer
+  needs the clean-data retrain before behavior (vs just location) is trustworthy.
+
 ### CAPTURE CORRUPTION is the root limiter (found 2026-06-24)
 The white-7MP video is corrupt at the CAPTURE level: still image, then the worm
 teleports across the dish (real motion lost). Files decode cleanly with regular
