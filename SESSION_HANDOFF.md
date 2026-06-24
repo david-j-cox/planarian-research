@@ -125,6 +125,27 @@ DEFINITIONS, not the model (RF is right at this size). Levers pursued:
    The label->train->active->label loop is reproducible; run it again for more
    turning/scrunch. Tool now has an 'x' no-worm skip + resume-at-first-unlabeled.
 
+### CAPTURE CORRUPTION is the root limiter (found 2026-06-24)
+The white-7MP video is corrupt at the CAPTURE level: still image, then the worm
+teleports across the dish (real motion lost). Files decode cleanly with regular
+33ms PTS -> NOT transfer corruption; it's OBS dropping/duplicating frames because
+the 7MP stream overloaded the machine. NOT fixable in post (motion frames don't
+exist). Position tracking of a slow worm partly survives; fine behavior
+(contractions, wig-wag timing) does not.
+- NOT auto-detectable: the user-flagged frozen windows have dup-fraction 0.00
+  (FEWER exact dups than clean windows), so it is not frame-duplication and no
+  metric I tried separates it. Manual triage is the only reliable flag.
+- Labeler now has an 'f' = FROZEN key (dropped from training/accuracy via SKIP).
+  Clean batch triage: 32/100 frozen, ALL from the 15:0x pool-expansion clips;
+  the go-to 15:54-16:08 clips got zero frozen marks (may be cleaner).
+- Model is stuck ~0.45 (5-class) / ~0.56 (4-class) across rounds; more labeling
+  on this footage will not fix it.
+- REAL FIX = re-capture below 7MP (720-1080p) so OBS stops dropping frames,
+  confirm zero dropped frames, then rerun the (now solid) label pipeline.
+- The pipeline IS solid now: blob-centroid position (9x less jitter), jitter
+  gate, dedup, ping-pong playback, slow-mo (-/= keys), f/x triage, active
+  learning. Ready for clean video.
+
 ### Corpus scope (checked 2026-06-23)
 Drive `My Drive/PlanarianVideos/` has ~968 videos across 4 dates, but only
 2026-06-02 is the CURRENT white rig (OpenDishWork/additional_videos = deprecated
