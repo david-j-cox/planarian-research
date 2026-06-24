@@ -19,6 +19,7 @@ Usage:
   python rt_dryrun.py --glob '../live_capture/2026-06-02_16-*.mkv' --reuse_bg --stride 2
 """
 import argparse
+import gc
 import glob as globmod
 import os
 import resource
@@ -30,6 +31,19 @@ from ultralytics import YOLO
 
 import fusion_tracker as ft
 import yolo_tracker as yt
+
+try:
+    import torch
+    _HAS_MPS = torch.backends.mps.is_available()
+except Exception:
+    torch = None; _HAS_MPS = False
+
+
+def reclaim():
+    """Per-clip memory reclaim: drop Python cycles + free the MPS cache."""
+    gc.collect()
+    if _HAS_MPS:
+        torch.mps.empty_cache()
 
 
 def track_location(video, model, bg, dish, fps, mm_per_px, conf, imgsz, device, stride):
@@ -148,6 +162,8 @@ def main():
         recs, st = track_location(vp, model, bg, dish, fps, a.mm_per_px,
                                   a.conf, a.imgsz, a.device, a.stride)
         nsmp = len(recs)
+        del recs
+        reclaim()
         dt = time.monotonic() - t0
         per_clip.append(dt); rss_series.append(cur_rss())
         flag = "" if dt < 60 else "  <-- OVER 60s"

@@ -27,8 +27,10 @@ Usage:
 """
 import argparse
 import csv
+import gc
 import glob
 import os
+import sys
 import time
 from datetime import datetime
 
@@ -38,6 +40,20 @@ from ultralytics import YOLO
 import fusion_tracker as ft
 import yolo_tracker as yt
 from rt_dryrun import track_location
+
+try:
+    import torch
+    _HAS_MPS = torch.backends.mps.is_available()
+except Exception:
+    torch = None; _HAS_MPS = False
+
+
+def reclaim():
+    """Per-clip reclaim: Python cycles + MPS cache. Halves the per-clip leak;
+    the periodic re-exec caps whatever residual (native-lib) leak remains."""
+    gc.collect()
+    if _HAS_MPS:
+        torch.mps.empty_cache()
 
 CSV_HEADER = ["video_file", "native_frame", "time_s", "x_mm", "y_mm",
               "speed_mm_s", "conf", "state"]
@@ -78,10 +94,17 @@ def main():
     ap.add_argument("--poll_s", type=float, default=5.0, help="folder poll interval")
     ap.add_argument("--stable_s", type=float, default=3.0, help="size-stable wait before processing")
     ap.add_argument("--rebuild_every", type=int, default=0, help="rebuild background every N clips (0=never)")
+    ap.add_argument("--restart_every", type=int, default=200,
+                    help="re-exec the process every N clips to cap a residual native "
+                         "memory leak (resumes via the processed-list; 0=never)")
     ap.add_argument("--delete_after", action="store_true", help="delete each clip after processing")
     ap.add_argument("--once", action="store_true", help="process the current backlog and exit (test mode)")
     a = ap.parse_args()
 
+    try:
+        sys.stdout.reconfigure(line_buffering=True)   # flush logs per line under a supervisor
+    except Exception:
+        pass
     sid = a.session_id or f"worm_run_{datetime.now():%Y%m%d_%H%M%S}"
     os.makedirs(a.out_dir, exist_ok=True)
     csv_path = os.path.join(a.out_dir, f"{sid}_tracks.csv")
@@ -99,7 +122,7 @@ def main():
         fh.flush()
 
     model = YOLO(a.model)
-    shared = None; n_since_bg = 0
+    shared = None; n_since_bg = 0; n_session = 0
     print(f"[{sid}] watching {os.path.abspath(a.watch_dir)}  -> {csv_path}")
     print(f"  resume: {len(processed)} clips already processed | stride={a.stride} reuse_bg=on")
 
@@ -138,6 +161,14 @@ def main():
                 print(f"  {name}: {dt:4.1f}s  {len(recs)} samples ({det} detected)"
                       + ("  <-- OVER 60s" if dt > 60 else ""))
                 did = True
+                del recs; reclaim(); n_session += 1
+                # Cap any residual native-library leak: re-exec the process every
+                # restart_every clips. State lives on disk (processed-list + CSV
+                # appended), so it resumes seamlessly; the OS frees all memory.
+                if a.restart_every and n_session >= a.restart_every and not a.once:
+                    print(f"  [restart] {n_session} clips this session -> re-exec to reset memory")
+                    fh.flush(); fh.close()
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
             if a.once and not pending:
                 break
             if not did:
