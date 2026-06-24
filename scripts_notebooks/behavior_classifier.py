@@ -29,7 +29,7 @@ FEATURES = ["speed_mm_s", "disp_mm", "head_osc_deg", "head_reversals",
             "ang_vel_p90_deg_s", "path_curv_deg_mm", "body_curv_deg"]
 
 
-def build_dataset(signals, blind_dir, min_support=1):
+def build_dataset(signals, blind_dir, min_support=1, max_jump_mm_s=50.0):
     man = json.load(open(os.path.join(blind_dir, "manifest.json")))
     window_s = float(man.get("window_s", 3.0))
     windows = {w["window_id"]: w for w in man["windows"]}
@@ -44,6 +44,23 @@ def build_dataset(signals, blind_dir, min_support=1):
     feats = compute_features(sig, window_s)
     video = np.asarray([str(v) for v in sig["video"]])
     nframe = np.asarray(sig["native_frame"]).astype(int)
+    # For the jitter gate: per-frame worm position + clip fps/scale.
+    cx = np.asarray(sig["cx_px"]); cy = np.asarray(sig["cy_px"])
+    lost = np.asarray(sig["lost"])
+    mmpp = float(sig["mm_per_px"]) if float(sig["mm_per_px"]) > 0 else 1.0
+    fps = float(sig["fps"]) if "fps" in sig else 30.0
+
+    def window_max_jump(w):
+        """Max frame-to-frame worm speed (mm/s) inside a window. A spike >> the
+        worm's ~7 mm/s max means a jittery/edge track whose behavior FEATURES are
+        corrupted -- such windows are dropped so they don't poison training."""
+        m = ((video == w["video"]) & (nframe >= w["start_frame"]) &
+             (nframe <= w["end_frame"]) & (lost == 0))
+        o = np.argsort(nframe[np.where(m)[0]])
+        x, y = cx[m][o], cy[m][o]
+        if len(x) < 3:
+            return 0.0
+        return float((np.hypot(np.diff(x), np.diff(y)) * mmpp * fps).max())
 
     # "no_worm"/"unknown" mark unusable windows; never let them be a class. Also
     # drop classes with too few examples to learn (they only emit F1=0 and warn);
@@ -57,6 +74,7 @@ def build_dataset(signals, blind_dir, min_support=1):
         print(f"dropped under-supported classes (<{min_support}): {dropped}")
     keep = set(classes)
     X, Y, rule, wids = [], [], [], []
+    n_jitter = 0
     rule_pred = {p["window_id"]: p.get("rule_pred", p.get("model_pred", "unknown"))
                  for p in json.load(open(os.path.join(blind_dir, "predictions_hidden.json")))}
 
@@ -65,6 +83,9 @@ def build_dataset(signals, blind_dir, min_support=1):
         if not behs:                       # unusable / only-rare-class: skip
             continue
         w = windows[wid]
+        if window_max_jump(w) > max_jump_mm_s:   # jittery track -> corrupt features
+            n_jitter += 1
+            continue
         m = (video == w["video"]) & (nframe == int(w["center_frame"]))
         if not m.any():
             continue
@@ -76,6 +97,9 @@ def build_dataset(signals, blind_dir, min_support=1):
         Y.append([1 if c in behs else 0 for c in classes])
         rule.append(rule_pred.get(wid, "unknown"))
         wids.append(wid)
+    if n_jitter:
+        print(f"dropped {n_jitter} jittery windows (position spike > {max_jump_mm_s:.0f} mm/s; "
+              f"corrupted features)")
     return np.array(X, float), np.array(Y, int), classes, rule, wids, window_s
 
 
@@ -87,6 +111,9 @@ def main():
     ap.add_argument("--out", default=os.path.join(here, "..", "realtime_runs", "behavior_clf.joblib"))
     ap.add_argument("--min_support", type=int, default=5,
                     help="drop behavior classes with fewer than this many labeled windows")
+    ap.add_argument("--max_jump_mm_s", type=float, default=50.0,
+                    help="drop labeled windows whose tracked position spikes faster "
+                         "than this (jitter -> corrupted features)")
     a = ap.parse_args()
 
     from sklearn.ensemble import RandomForestClassifier
@@ -98,7 +125,8 @@ def main():
     from sklearn.metrics import f1_score, precision_score, recall_score
     import joblib
 
-    X, Y, classes, rule, wids, window_s = build_dataset(a.signals, a.blind_dir, a.min_support)
+    X, Y, classes, rule, wids, window_s = build_dataset(
+        a.signals, a.blind_dir, a.min_support, a.max_jump_mm_s)
     print(f"dataset: {X.shape[0]} windows, {X.shape[1]} features, {len(classes)} classes")
     print(f"classes: {classes}")
     print(f"label support: " + "  ".join(f"{c}={int(Y[:,j].sum())}" for j, c in enumerate(classes)))
