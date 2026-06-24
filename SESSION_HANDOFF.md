@@ -4,6 +4,37 @@ Resume point for the next session. Everything below is on disk; data/labels/
 weights are gitignored (live under `realtime_runs/`, `live_capture/`, and
 `scripts_notebooks/runs/`).
 
+## ====== RESUME HERE (2026-06-24 EOD) ======
+All code committed; working tree clean (only pre-existing untracked
+docs/Conference_Abstract + yolo11n-pose.pt). No processes running.
+
+THE BIG PICTURE: tooling is solid; the existing white-7MP footage is CORRUPT at
+capture (frozen frame -> worm teleports; OBS dropped frames at 7MP). So the model
+is stuck ~0.45-0.56 and labeling more of THIS footage won't help. Two parallel
+tracks unblock everything:
+
+TRACK 1 — CLEAN DATA (user action): user is capturing a clean day of data,
+recording BELOW 7MP (720-1080p) so OBS stops dropping frames; confirm zero
+dropped frames. This is the foundational fix. When clean clips exist:
+  - retrain the behavior model on them (the pipeline -- track -> sample ->
+    label (with f/x triage, slow-mo) -> merge_label_sets -> behavior_classifier
+    -- is solid and ready). That makes behavior output trustworthy.
+
+TRACK 2 — REAL-TIME PIPELINE (built + verified this session, ready to deploy):
+  - `rt_watch.py` watches the Drive clips folder and emits a rolling
+    location+movement CSV. 5.3x real-time headroom (11.4s/clip), memory leak
+    fixed (reclaim + periodic re-exec). Verified end-to-end.
+  - LIVE CMD: python -u rt_watch.py --watch_dir "$DRIVE/planarian_clips"
+             --session_id worm_run_01
+  - REMAINING: wrap in a launchd supervisor (auto-restart on crash/reboot);
+    behavior layer waits on Track 1's clean-data retrain (location/movement is
+    production-ready now).
+
+NEXT SESSION, likely first moves: (a) point rt_watch at the live Drive folder for
+the location readout, (b) once a clean day is captured, run the label->retrain
+loop on it. See the dated sections below for full detail on each piece.
+## ==========================================
+
 ## Where we landed (updated 2026-06-22)
 Goal: a near-perfect worm localizer on the **go-to rig = latest white 7MP**
 (2026-06-02 15:54–16:08 series, 3360x2100, warm-white; 15 clips local in
