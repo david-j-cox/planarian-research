@@ -4,6 +4,18 @@
 **Created:** 2026-06-02
 **Role of this machine:** pull 1-minute video clips that arrive via Google Drive, track the worm in each, accumulate one rolling CSV, and run analysis. The capture Mac only records + uploads; this machine does all compute.
 
+> **UPDATE 2026-06-26 — superseded by `rt_watch.py` + a cloud plan.** Live compute
+> is now `rt_watch.py` (supervised via `run_watch_supervised.sh`), not
+> `watch_folder_tracker.py`, and it does location + behavior + ethogram + active
+> clip retention. It currently runs on the capture Mac itself. **MIGRATION PLAN**
+> (to retire the Mac): a 24/7 cloud Linux box reads Drive via **rclone** (the
+> macOS Drive File Provider is Mac-only and hangs under launchd) and runs the
+> pipeline as systemd services. Target: **Oracle Cloud Always-Free** (Ampere ARM
+> 2 OCPU/12GB, $0) for LOCATION at imgsz 640/stride 3; the BEHAVIOR layer ~doubles
+> compute and needs a **paid box** (~$16/mo Hetzner CAX31 ARM, EU). CPU-only, no
+> GPU. If the endicott Workspace blocks rclone OAuth, share the clips folder to a
+> personal Gmail. Canonical status: SESSION_HANDOFF.md.
+
 ---
 
 ## 1. The experiment

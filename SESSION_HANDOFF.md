@@ -4,6 +4,102 @@ Resume point for the next session. Everything below is on disk; data/labels/
 weights are gitignored (live under `realtime_runs/`, `live_capture/`, and
 `scripts_notebooks/runs/`).
 
+## ====== CURRENT STATE (2026-06-26) -- FULL LIVE SYSTEM ======
+A clean multi-hour capture ("worm_run_01") has been running since 2026-06-25
+18:43 and is STILL RECORDING (a ~24h run). Rig (separate Mac) records 1-min
+3360x2100 @10fps .mkv clips, uploads to Google Drive (dcox@endicott.edu), AND
+streams to Twitch (channel `behavioraldatasciencelab`). Everything below runs on
+THIS Mac, as background jobs INSIDE the Claude session (user keeps it open) --
+NOT launchd (see "WHY NOT launchd"). All code UNCOMMITTED on `dev`.
+
+WHAT'S LIVE (3 background loops + supervisor):
+  - scripts_notebooks/run_watch_supervised.sh -> rt_watch.py (restart-on-crash).
+    Args: --stable_s 6 --min_frames 560 --delete_after --keep_total 60
+          --behavior_model ../realtime_runs/behavior_clf.joblib
+          --label_queue ../realtime_runs/label_queue --keep_per_day 150
+    Per clip: location+movement track  +  LIVE BEHAVIOR (rt_behavior.clip_behavior).
+    ~33s/clip (location ~14s + behavior ~18s), under the 60s budget on MPS.
+  - rt_plot.py --session worm_run_01 --loop 60  -> realtime_runs/worm_run_01_live.png
+    7 panels: trajectory, occupancy, position(t), speed(t, log), distance-from-
+    center, turning rate, and an ETHOGRAM (behavior over time). 6 mm/s artifact
+    cutoff (planarian gliding tops ~5 mm/s); trajectory breaks only on >15 mm/s
+    teleports; all metric panels dish-centered.
+  - publish_live.sh -> force-pushes live.png to GitHub Pages every ~6 min.
+
+PUBLIC WEBSITE: https://david-j-cox.github.io/planarian-live/  (public repo
+david-j-cox/planarian-live, separate from this research repo). index.html embeds
+the Twitch player (desktop) / a tap-to-watch live-preview card (mobile Safari
+can't play the inline embed) + the live 7-panel plot (auto-refresh 60s). Worm
+favicon. Publish loop runs in the Claude session.
+
+OUTPUTS (realtime_runs/):
+  worm_run_01_tracks.csv      location+movement (rolling; rows are append-order,
+                              NOT chronological -- sort by clip time; clean_tracks.py
+                              writes a sorted/deduped/overlap-trimmed copy).
+  worm_run_01_behavior.csv    per-second behavior state + confidence (ethogram).
+  worm_run_01_processed.txt   resume ledger.
+  worm_run_01_keep_manifest.csv  the 60 balanced training clips (done).
+  keep_clips/                 the 60 labeled training clips (~2.6GB).
+  label_queue/                NEW uncertain/rare clips for labeling (active
+                              learning, <=150/day); _kept.csv logs why each kept.
+  behavior_clf.joblib         PRODUCTION behavior model (see below).
+
+BEHAVIOR MODEL (v1, trained THIS session on clean data, PROMOTED to prod):
+  5 classes: contracted, gliding, resting, turning, wig_wag. RandomForest,
+  LOO-CV macro-F1 0.84 (gliding 0.92, contracted 0.89, resting 0.86, turning
+  0.86, wig_wag 0.65). IMPORTANT: what the labeler first called "scrunching" was
+  renamed "contracted" -- the worm RESTS in a contracted pear/oval posture; it is
+  NOT the scrunching escape gait (absent in undisturbed footage; needs a future
+  stimulus session). peristalsis(1)/reversing(0) too few -> deferred. Old
+  corrupt-7MP model backed up: behavior_clf_OLD_corrupt7mp.joblib.bak.
+  Pipeline: yolo_to_signals (morphology .npz) -> behavior_features ->
+  behavior_label_tool sample/label (blind, windowed) -> behavior_classifier.
+
+TO LABEL MORE (the user will ask Claude to launch this): the day's uncertain
+clips collect in label_queue/. To make a blind batch and label:
+  cd scripts_notebooks
+  ../venv/bin/python behavior_label_tool.py sample --signals <gen first> ...
+  # simplest: re-run yolo_to_signals on label_queue/*.mkv -> a signals.npz, then
+  #   behavior_label_tool.py sample  (or `active` with --model behavior_clf.joblib),
+  #   then LAUNCH THE GUI via AppleScript so it has display+keyboard:
+  #   osascript -e 'tell app "Terminal" to do script "cd <scripts> && ../venv/bin/python behavior_label_tool.py label --manifest_dir <dir> --clips_dir ../realtime_runs/label_queue"'
+  # then merge_label_sets + behavior_classifier to retrain; re-promote the joblib.
+  Keys shown on-screen: 1-7 behaviors, n/space next, b back, x no-worm, f frozen, q quit.
+
+CLOUD MIGRATION (planned, not built): user must turn off this Mac eventually.
+  Target: Oracle Cloud Always-Free (Ampere ARM, 2 OCPU/12GB, $0) for the LOCATION
+  pipeline, tuned imgsz 640/stride 3 (benched ~14.6s/clip @2 threads -> ~30-45s
+  on the free box). Reads Drive via rclone (NOT File Provider; share clips folder
+  to a personal Gmail if endicott Workspace blocks OAuth). systemd services.
+  KEY: behavior ~doubles compute and will NOT fit the free box -> behavior is the
+  proven trigger for a PAID box (~$16/mo Hetzner CAX31 ARM, EU). CPU-only (no GPU).
+  See docs/compute_node_handoff.md.
+
+DRIVE-SYNC HARDENING in rt_watch.py (all verified live): materialized() gates on
+on-disk block count so we never open() an online-only/partial Drive file (open
+hangs the whole loop -- __open_nocancel); prefetch() (detached `cat`) pulls
+online-only clips; clip_ready() requires near-full stable frame count (byte-size
+"stable" lies on Drive); retry-not-discard on transient build_background failure;
+--delete_after only deletes FULL clips. 7MP @10fps decodes clean (10fps fixed the
+old high-fps frozen-frame corruption; 1080p not needed).
+
+WHY NOT launchd: a bare launchd agent CANNOT read the Drive File Provider folder
+(open() needs Full Disk Access, which a GUI/terminal session inherits but launchd
+does not -> hangs). To use launchd later, grant FDA to the python binary and
+recreate the agent. On Linux (cloud) this is a non-issue (systemd + rclone).
+
+MONITORS (Claude-session bash/Monitor tasks): supervisor-log anomalies (SHORT
+clip, SUSTAINED low detection = 3+ clips <60%, errors, label-queue), ~7.5min
+processing-stall heartbeat. Detection 90-100% normally; sustained ~55% dips are
+the worm edge-following (radius ~91% to wall), benign.
+
+TO STOP: pkill -f run_watch_supervised; pkill -f rt_watch.py; pkill -f rt_plot.py; pkill -f publish_live.sh
+TO RESUME after stop: cd scripts_notebooks; zsh run_watch_supervised.sh &  (then
+relaunch rt_plot loop + publish_live.sh). All state resumes from the ledgers.
+SAVED ARTICLES: articles/Nociception and Planarians.pdf, Escape Response and
+Planarians.pdf (open-access; back the ~5 mm/s gliding ceiling / escape gait).
+## =========================================================
+
 ## ====== RESUME HERE (2026-06-24 EOD) ======
 All code committed; working tree clean (only pre-existing untracked
 docs/Conference_Abstract + yolo11n-pose.pt). No processes running.

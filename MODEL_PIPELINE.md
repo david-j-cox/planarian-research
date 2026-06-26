@@ -12,10 +12,16 @@ built on the M5 Max from the migrated S3 session. Trains/runs on Apple MPS.
   collapse to the centroid because the pseudo-label head/tail assignment is
   anatomically inconsistent.
 - **Behavior (v1):** RandomForest on windowed track features (LOO-CV
-  macro-F1 0.67, micro-F1 0.80 vs rule baseline 0.24). Approximate in
-  deployment because inference features come from the PCA axis, not the
-  classical 20-point midline it trained on. Location is the solid part;
-  behavior is a usable v1.
+  macro-F1 0.67, micro-F1 0.80 vs rule baseline 0.24). Location is the solid
+  part; behavior is a usable v1.
+  - **UPDATE 2026-06-26 — retrained on clean data (worm_run_01), promoted.**
+    Production `realtime_runs/behavior_clf.joblib` now has 5 classes
+    (**contracted, gliding, resting, turning, wig_wag**), RandomForest, LOO-CV
+    **macro-F1 0.84** (gliding 0.92, contracted 0.89, resting 0.86, turning 0.86,
+    wig_wag 0.65). "scrunching" was renamed **contracted** (undisturbed worm
+    rests in a contracted posture; the escape gait is absent here). Runs LIVE per
+    clip via `rt_behavior.clip_behavior` -> ethogram + active-learning clip keep.
+    See SESSION_HANDOFF.md and docs/behavior_ethogram.md.
 
 ## Environment
 Python 3.12 venv at `venv/` with torch 2.12 (MPS), ultralytics 8.4, opencv.

@@ -1,5 +1,11 @@
 # Context handoff for Claude on the M5 Max
 
+> **HISTORICAL (2026-06-20 migration snapshot) — DO NOT treat as current.** Since
+> this was written, the YOLO localizer AND a behavior model were trained, and a
+> full live real-time system was built. For the current state, read
+> **SESSION_HANDOFF.md** ("CURRENT STATE (2026-06-26)"). The "no trained model /
+> no torch" notes below are obsolete.
+
 Read this first. It carries context the originating machine had that this one won't.
 Goal: finetune a vision model to track worm location + behavior. See also
 `M5_PULL_INSTRUCTIONS.md` (how to pull data) and `MIGRATION_MANIFEST.md` (dataset inventory).

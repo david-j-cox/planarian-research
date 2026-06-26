@@ -4,6 +4,16 @@
 **Status:** Planning / Pre-implementation
 **Hardware:** Raspberry Pi (already available), USB camera, custom light rig
 
+> **STATUS UPDATE 2026-06-26 — IMPLEMENTED (differs from this 2026-03 plan).**
+> Built on a Mac (not a Raspberry Pi), around `rt_watch.py` (supervised) with a
+> live behavior layer (`rt_behavior.py`), a 7-panel live plot incl. an ETHOGRAM
+> (`rt_plot.py`), a public GitHub-Pages site
+> (https://david-j-cox.github.io/planarian-live/) embedding the Twitch stream +
+> the live plot, and active-learning clip retention (`label_queue/`, ≤150/day). A
+> cloud migration (Oracle free for location, paid box for behavior) is planned.
+> This doc is still useful for the original vision/storage rationale; for the
+> AS-BUILT system and how to run/resume it, see **SESSION_HANDOFF.md** (canonical).
+
 ---
 
 ## 1. Vision

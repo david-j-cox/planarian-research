@@ -1,5 +1,16 @@
 # Planarian behavior ethogram (white-7MP rig)
 
+> **UPDATE 2026-06-26 — v1 model trained on clean data.** Production model
+> `realtime_runs/behavior_clf.joblib` has 5 classes: **contracted, gliding,
+> resting, turning, wig_wag** (RandomForest, LOO-CV macro-F1 0.84). The
+> **"scrunching" entry below was renamed `contracted`** for worm_run_01: the
+> undisturbed worm rests in a contracted pear/oval posture, which is NOT the
+> scrunching escape gait. True scrunching (the rhythmic escape lurch defined
+> below) is absent in undisturbed footage — keep the definition for a future
+> stimulus session (it would be a separate class then). peristalsis/reversing had
+> too few examples to model and are deferred. Definitions below remain the
+> labeling reference. System status: see SESSION_HANDOFF.md.
+
 Operational definitions for labeling worm behavior in the 3 s windows shown by
 `behavior_label_tool.py`. The goal is INTER-LABELER CONSISTENCY: two people (or
 the same person on two days) should assign the same label to the same window.
