@@ -22,6 +22,11 @@ import matplotlib
 matplotlib.use("Agg")            # headless: write files, no GUI needed
 import matplotlib.pyplot as plt
 
+# Live view shows only the most recent HISTORY_S seconds. The full session is
+# ~400k+ points; rendering all of it starves a small CPU box. The complete
+# record stays in the CSV; only the plot window is capped.
+HISTORY_S = float(os.environ.get("PLOT_HISTORY_S", 3 * 3600))    # default: last 3 h
+
 
 def _clip_start(name):
     """Parse wall-clock start time from a clip filename like
@@ -57,6 +62,9 @@ def load(csv_path, max_speed):
         # chronological. (stable sort keeps within-clip frame order.)
         order = np.argsort(tt, kind="stable")
         xs, ys, sp, tt = xs[order], ys[order], sp[order], tt[order]
+        if HISTORY_S and len(tt):                                  # keep only recent window
+            keep = tt >= (tt.max() - HISTORY_S)
+            xs, ys, sp, tt = xs[keep], ys[keep], sp[keep], tt[keep]
         tmin = (tt - tt.min()) / 60.0                              # minutes since start
         t0 = float(tt.min())
     else:
@@ -268,13 +276,28 @@ def render(csv_path, out_path, max_speed, center=True, behavior_csv=None):
                   "peristalsis": "#ff7f0e", "reversing": "#17becf"}
     bt, blab = load_behavior(behavior_csv, t0) if behavior_csv else (np.array([]), np.array([]))
     if len(bt):
-        for beh, col in BEH_COLORS.items():
-            m = blab == beh
-            if m.any():
-                ax7.scatter(bt[m], np.zeros(m.sum()), c=col, marker="|", s=90, label=beh)
-        ax7.legend(loc="upper right", ncol=5, fontsize=7, framealpha=0.9,
-                   handletextpad=0.2, columnspacing=0.9)
-        ax7.set_title("Ethogram  (behavior state)")
+        # Proper ethogram: bin time, fill each bin with its DOMINANT behavior color.
+        # (Overlapping per-point markers let whichever class drew last paint over
+        # the rest at this compressed scale -- that made it look all-contracted.)
+        span = max(tmin.max(), 1.0)
+        nbins = int(np.clip(span, 60, 700))
+        edges = np.linspace(0, span, nbins + 1)
+        bidx = np.clip(np.digitize(bt, edges) - 1, 0, nbins - 1)
+        seen = []
+        for b in range(nbins):
+            sel = bidx == b
+            if sel.any():
+                vals, cnts = np.unique(blab[sel], return_counts=True)
+                dom = vals[np.argmax(cnts)]
+                ax7.axvspan(edges[b], edges[b + 1], color=BEH_COLORS.get(dom, "0.5"), lw=0)
+                seen.append(dom)
+        order = ["resting", "gliding", "turning", "wig_wag", "contracted",
+                 "peristalsis", "reversing"]
+        present = [b for b in order if b in set(seen)]
+        ax7.legend([plt.Rectangle((0, 0), 1, 1, color=BEH_COLORS[b]) for b in present],
+                   present, loc="upper right", ncol=5, fontsize=7, framealpha=0.95,
+                   handlelength=1.0, handletextpad=0.3, columnspacing=0.8)
+        ax7.set_title("Ethogram  (dominant behavior per ~1-min bin)")
     else:
         ax7.text(0.5, 0.5, "ethogram populates once behavior tracking is live",
                  ha="center", va="center", transform=ax7.transAxes, color="0.55", fontsize=10)

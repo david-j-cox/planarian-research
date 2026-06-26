@@ -320,8 +320,15 @@ def main():
                         continue          # leave pending; do NOT mark processed
                     print(f"  {name}: no dish/bg after {MAX_BG_RETRIES} tries -> skip")
                     processed.add(name); open(proc_path, "a").write(name + "\n"); continue
-                recs, st = track_location(vp, model, bg, dish, fps, a.mm_per_px,
-                                          a.conf, a.imgsz, a.device, a.stride)
+                if beh is not None:
+                    # UNIFIED single YOLO pass -> location recs + behavior in one go
+                    recs, rbres = beh["rb"].track_and_behavior(
+                        vp, model, bg, dish, fps, beh["art"], a.mm_per_px,
+                        a.conf, a.imgsz, a.device, a.stride)
+                else:
+                    recs, _ = track_location(vp, model, bg, dish, fps, a.mm_per_px,
+                                             a.conf, a.imgsz, a.device, a.stride)
+                    rbres = None
                 for (nf, ts, xmm, ymm, spd, cf, state) in recs:
                     w.writerow([name, nf, f"{ts:.3f}", f"{xmm:.3f}", f"{ymm:.3f}",
                                 f"{spd:.3f}", f"{cf:.3f}", state])
@@ -339,11 +346,9 @@ def main():
                 # Behavior pass: per-clip states (-> ethogram CSV, ~1 row/s) and
                 # uncertainty-based keep (low-confidence / rare-behavior clips are
                 # moved to the label_queue, up to keep_per_day -- active learning).
-                if beh is not None and is_full:
+                # rbres was already computed in the unified track_and_behavior pass.
+                if beh is not None and is_full and rbres is not None:
                     try:
-                        rbres = beh["rb"].clip_behavior(vp, model, beh["art"],
-                                    mm_per_px=a.mm_per_px, conf=a.conf,
-                                    imgsz=a.imgsz, device=a.device)
                         cls = rbres["classes"]; nf2 = rbres["native_frame"]
                         ts2 = rbres["time_s"]; dom = rbres["dom"]
                         cf2 = rbres["conf"]; ok2 = rbres["ok"]

@@ -4,7 +4,18 @@ Resume point for the next session. Everything below is on disk; data/labels/
 weights are gitignored (live under `realtime_runs/`, `live_capture/`, and
 `scripts_notebooks/runs/`).
 
-## ====== CURRENT STATE (2026-06-26) -- FULL LIVE SYSTEM ======
+## ====== MIGRATED TO CLOUD (2026-06-26 PM) -- READ cloud/DEPLOY.md FIRST ======
+The live pipeline now runs on a **Hetzner CX33 box (78.47.76.201)**, NOT this Mac.
+The separate recording Mac keeps uploading clips to Drive; the box pulls, processes
+(unified single YOLO pass, location + behavior, imgsz 1024 / stride 3, ~50s/clip),
+and publishes the site -- all as auto-restarting systemd services. The processing
+Mac is retired. Full runbook + gotchas: **cloud/DEPLOY.md**. Key changes this PM:
+unified single-pass (rt_behavior.track_and_behavior; one YOLO pass does both),
+ethogram render fix + 3h cap (rt_plot), cloud/ deploy kit. Follow-up: retrain
+behavior on stride-3 signals (served stride != trained all-frames). The section
+below describes the now-retired on-Mac setup (kept for reference).
+
+## ====== (SUPERSEDED) CURRENT STATE (2026-06-26 AM) -- ON-MAC LIVE SYSTEM ======
 A clean multi-hour capture ("worm_run_01") has been running since 2026-06-25
 18:43 and is STILL RECORDING (a ~24h run). Rig (separate Mac) records 1-min
 3360x2100 @10fps .mkv clips, uploads to Google Drive (dcox@endicott.edu), AND
