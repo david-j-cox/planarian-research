@@ -4,7 +4,7 @@
 - **Box:** Hetzner **CX33** (4 vCPU / 8 GB, x86, Ubuntu 24.04 LTS), Nuremberg.
   Public IP **78.47.76.201**. SSH: `ssh root@78.47.76.201` (key: ~/.ssh/id_ed25519).
 - Runs the FULL pipeline on CPU: unified single YOLO pass (location + behavior),
-  imgsz **1024**, **stride 3**, ~46-50s/clip (under the 60s/clip budget).
+  imgsz **1024**, **stride 4**, ~44s/clip (16s margin under the 60s/clip budget).
 - Reads clips from Google Drive via rclone (endicott account), processes, deletes.
 - Publishes the live plot to the planarian-live GitHub Pages site (deploy key).
 - 4 systemd services, auto-start on boot: planarian-{drivepull,watch,plot,publish}.
@@ -52,5 +52,17 @@ retired -- nothing in the live path depends on it. Turning it off is safe.
 - **The plot must be cheap + low priority.** Rendering the full ~430k-point session
   (2.2 GB, ~70s CPU) starves the watcher. Fix: cap to last 3h (PLOT_HISTORY_S) and
   run the plot service at Nice=19. Render ~5 min.
-- Behavior is served at **stride 3** but the model was trained on all-frame signals
-  -> rougher predictions. Follow-up: retrain on stride-3 signals for train/serve match.
+- **Drive upload race:** the recording Mac is still UPLOADING the newest clip when
+  rclone pulls -> 0-byte / half-written files ("corrupted on transfer: sizes
+  differ") that jam the watcher. Fix: `rclone move --min-age 2m` (only pull clips
+  settled >2 min, i.e. fully uploaded). Costs ~2 min latency. A clip that gets
+  permanently corrupted in Drive must be deleted or rclone retries it every cycle.
+- **A growing backlog is self-defeating** on a small box: the watcher re-checks
+  every pending clip each loop, so a big queue adds overhead and never drains. Keep
+  it caught up; if a backlog builds, archive the old clips (~/clips_archive) and
+  let the box run on fresh clips only.
+- The macOS File-Provider gates (materialized/prefetch) in rt_watch are harmless on
+  Linux IF clips arrive complete (the --min-age fix ensures that); a 0-byte file
+  makes the watcher loop on prefetch forever.
+- Behavior is served at **stride 4** but the model was trained on all-frame signals
+  -> rougher predictions. Follow-up: retrain on stride-4 signals for train/serve match.

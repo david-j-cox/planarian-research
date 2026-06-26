@@ -5,8 +5,9 @@
 # that auto-start on boot. See DEPLOY.md for the full runbook and gotchas.
 #
 # Sizing note (measured): the full pipeline (location+behavior, unified single
-# YOLO pass) at imgsz 1024 / stride 3 is ~46-50s/clip on 4 cores -- under the 60s
-# budget. A 2-core box (~123s) and imgsz 640 (detection collapses) do NOT work.
+# YOLO pass) at imgsz 1024 / stride 4 is ~44s/clip on 4 cores (16s margin under
+# the 60s budget; stride 3 was ~50s but too tight once the plot + drive_pull
+# contend). A 2-core box (~123s) and imgsz 640 (detection collapses) do NOT work.
 #
 # Assumes:
 #   ~/planarian-research            <- git clone (code; note core modules live on dev)
@@ -58,7 +59,7 @@ After=planarian-drivepull.service
 [Service]
 Environment=HOME=/root
 WorkingDirectory=$SN
-ExecStart=$PY -u rt_watch.py --watch_dir $HOME/clips_in --session_id worm_run_01 --out_dir $REPO/realtime_runs --device cpu --imgsz 1024 --stride 3 --stable_s 4 --min_frames 560 --delete_after --behavior_model $REPO/realtime_runs/behavior_clf.joblib --label_queue $REPO/realtime_runs/label_queue --keep_per_day 150
+ExecStart=$PY -u rt_watch.py --watch_dir $HOME/clips_in --session_id worm_run_01 --out_dir $REPO/realtime_runs --device cpu --imgsz 1024 --stride 4 --stable_s 2 --min_frames 560 --delete_after --behavior_model $REPO/realtime_runs/behavior_clf.joblib --label_queue $REPO/realtime_runs/label_queue --keep_per_day 150
 Restart=always
 RestartSec=10
 [Install]

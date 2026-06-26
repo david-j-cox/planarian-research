@@ -14,8 +14,12 @@ WATCH="${WATCH_DIR:-$HOME/clips_in}"
 mkdir -p "$WATCH"
 
 while true; do
+  # --min-age 2m: only pull clips that have been SETTLED in Drive for 2 min, i.e.
+  # the recording Mac has finished uploading them. Without this, rclone grabs
+  # clips mid-upload -> 0-byte / half-written files ("corrupted on transfer:
+  # sizes differ") that jam the watcher. Costs ~2 min of latency; worth it.
   rclone move "${REMOTE}:${DRIVE_DIR}" "$WATCH" \
-      --include "*.mkv" --transfers 4 --checkers 8 \
+      --include "*.mkv" --min-age 2m --transfers 4 --checkers 8 \
       --no-traverse --drive-skip-gdocs 2>>"$HOME/drive_pull.log"
   sleep 15
 done
