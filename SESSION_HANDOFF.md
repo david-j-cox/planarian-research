@@ -4,16 +4,26 @@ Resume point for the next session. Everything below is on disk; data/labels/
 weights are gitignored (live under `realtime_runs/`, `live_capture/`, and
 `scripts_notebooks/runs/`).
 
-## ====== MIGRATED TO CLOUD (2026-06-26 PM) -- READ cloud/DEPLOY.md FIRST ======
-The live pipeline now runs on a **Hetzner CX33 box (78.47.76.201)**, NOT this Mac.
-The separate recording Mac keeps uploading clips to Drive; the box pulls, processes
-(unified single YOLO pass, location + behavior, imgsz 1024 / stride 3, ~50s/clip),
-and publishes the site -- all as auto-restarting systemd services. The processing
-Mac is retired. Full runbook + gotchas: **cloud/DEPLOY.md**. Key changes this PM:
-unified single-pass (rt_behavior.track_and_behavior; one YOLO pass does both),
-ethogram render fix + 3h cap (rt_plot), cloud/ deploy kit. Follow-up: retrain
-behavior on stride-3 signals (served stride != trained all-frames). The section
-below describes the now-retired on-Mac setup (kept for reference).
+## ====== BATCH CATCH-UP ON THIS MAC (2026-06-26 PM, FINAL) -- run `catch_up.sh` ======
+ARCHITECTURE (after trying then RETIRING a cloud box): the recording Mac uploads
+1-min clips to the endicott Drive continuously (68 TB free -> clips buffer
+indefinitely). THIS Mac processes them in BATCH on MPS when it comes online:
+**`bash catch_up.sh`** pulls accumulated clips (rclone --min-age 2m), processes
+location+behavior at imgsz 1024 / stride 2 (~5s/clip on MPS, full quality), renders
+the 3h-capped plot, and force-pushes it to the GitHub Pages site -- then deletes
+processed clips from Drive. A day's backlog clears in ~2h. Not real-time, but the
+Twitch stream is always live and the data is for hours/days-scale analysis.
+
+WHY NOT cloud: a Hetzner CX33 (4-core CPU) could only manage stride-4 ~50s/clip and
+kept breaking even with no margin; MPS here is ~10x faster AND higher quality for $0.
+The cloud box was decommissioned; cloud/DEPLOY.md kept for reference if revisited.
+
+KEY CODE THIS PM: rt_behavior.track_and_behavior (unified single YOLO pass = location
++ behavior in one inference); rt_plot ethogram render fix + 3h cap; rt_watch gains
+RT_LOCAL_FS bypass (skip Drive File-Provider gates for local clips) + auto-quarantine
+of truncated clips (<min_frames) so --once can't jam. FOLLOW-UP: retrain behavior on
+stride-2 signals (served stride != trained all-frames). The section below is the
+now-retired in-session on-Mac live setup (kept for reference).
 
 ## ====== (SUPERSEDED) CURRENT STATE (2026-06-26 AM) -- ON-MAC LIVE SYSTEM ======
 A clean multi-hour capture ("worm_run_01") has been running since 2026-06-25

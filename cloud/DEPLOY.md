@@ -1,3 +1,9 @@
+# Cloud deploy runbook (RETIRED 2026-06-26 -- reference only)
+
+> The cloud box was decommissioned in favor of **batch catch-up on the Mac**
+> (`catch_up.sh`): MPS is ~10x faster and higher quality than a 4-core CPU box, for
+> $0. See SESSION_HANDOFF.md. This runbook is kept in case cloud is revisited.
+
 # Cloud deploy runbook + live-state (planarian compute node)
 
 ## LIVE (as of 2026-06-26 migration)

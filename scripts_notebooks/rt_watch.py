@@ -95,6 +95,8 @@ def prefetch(path):
     the file through -- which forces the File Provider to fetch it -- in its own
     subprocess. If that read blocks, only the helper blocks; the watcher loop
     stays responsive and picks the clip up on a later poll once it materializes."""
+    if os.environ.get("RT_LOCAL_FS"):
+        return None          # local files (rclone/scp): nothing to prefetch
     try:
         return subprocess.Popen(["cat", path], stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL)
@@ -116,6 +118,8 @@ def materialized(path):
         st = os.stat(path)
     except OSError:
         return False
+    if os.environ.get("RT_LOCAL_FS"):
+        return st.st_size > 0          # local FS: only the empty-file guard applies
     return st.st_size > 0 and st.st_blocks * 512 >= st.st_size
 
 
@@ -306,7 +310,19 @@ def main():
                 if not stable(vp, a.stable_s):
                     continue                      # size still changing; try next poll
                 if not clip_ready(vp, a.min_frames):
-                    continue                      # belt-and-suspenders: frames decode & stable
+                    # Already passed stable() above, so the size is NOT changing -- a
+                    # persistently short clip is truncated/corrupt, not still-downloading.
+                    # Skip it permanently (quarantine + mark processed) so the loop can
+                    # terminate instead of re-decoding it forever (jams --once).
+                    print(f"  {name}: truncated (<{a.min_frames} frames) -> quarantined")
+                    processed.add(name); open(proc_path, "a").write(name + "\n")
+                    try:
+                        qdir = os.path.join(a.watch_dir, "_truncated")
+                        os.makedirs(qdir, exist_ok=True)
+                        os.rename(vp, os.path.join(qdir, name))
+                    except OSError:
+                        pass
+                    continue
                 t0 = time.monotonic()
                 if shared is None or (a.rebuild_every and n_since_bg >= a.rebuild_every):
                     bg, dish, fps = ft.build_background(vp); shared = (bg, dish, fps); n_since_bg = 0
