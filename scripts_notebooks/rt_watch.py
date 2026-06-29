@@ -29,6 +29,7 @@ import argparse
 import csv
 import gc
 import glob
+import json
 import os
 import shutil
 import subprocess
@@ -158,6 +159,30 @@ def clip_ready(path, min_frames, settle_s=3.0, checks=2):
             return False          # still growing -> not done syncing
         last = n
     return True
+
+
+def update_dish_sidecar(path, dish, mm_per_px, alpha=0.15):
+    """Maintain the true-dish-center sidecar rt_plot reads (so a parked, off-center
+    worm isn't drawn at 0,0). The rig is fixed, so the center barely moves: bootstrap
+    on first write, then EMA-blend new Hough fits, and reject a wild fit (>200 px jump
+    = a bad detection) so one bad clip can't yank the origin."""
+    cx, cy, r = float(dish[0]), float(dish[1]), float(dish[2])
+    try:
+        prev = json.load(open(path))
+    except (OSError, ValueError):
+        prev = None
+    if prev and all(k in prev for k in ("cx_px", "cy_px", "r_px")):
+        if np.hypot(cx - prev["cx_px"], cy - prev["cy_px"]) > 200:
+            return
+        cx = (1 - alpha) * prev["cx_px"] + alpha * cx
+        cy = (1 - alpha) * prev["cy_px"] + alpha * cy
+        r = (1 - alpha) * prev["r_px"] + alpha * r
+    out = {"cx_px": cx, "cy_px": cy, "r_px": r, "mm_per_px": mm_per_px,
+           "cx_mm": cx * mm_per_px, "cy_mm": cy * mm_per_px, "R_mm": r * mm_per_px}
+    try:
+        json.dump(out, open(path, "w"), indent=2)
+    except OSError:
+        pass
 
 
 def main():
@@ -306,6 +331,21 @@ def main():
             for vp in pending:
                 name = os.path.basename(vp)
                 if not materialized(vp):
+                    # Under RT_LOCAL_FS a not-materialized file is a 0-byte one
+                    # (see materialized()): a failed/partial transfer artifact that
+                    # will never grow. Left in place it never passes materialized(),
+                    # never reaches the truncate-quarantine below, so it sits in
+                    # `pending` forever -- wedging the loop and blocking --once from
+                    # ever terminating. Quarantine it like any other unusable clip.
+                    if os.environ.get("RT_LOCAL_FS"):
+                        print(f"  {name}: 0-byte local clip (bad transfer) -> quarantined")
+                        processed.add(name); open(proc_path, "a").write(name + "\n")
+                        try:
+                            qdir = os.path.join(a.watch_dir, "_truncated")
+                            os.makedirs(qdir, exist_ok=True)
+                            os.rename(vp, os.path.join(qdir, name))
+                        except OSError:
+                            pass
                     continue                      # Drive online-only / partial -> never open (open() blocks)
                 if not stable(vp, a.stable_s):
                     continue                      # size still changing; try next poll
@@ -326,6 +366,9 @@ def main():
                 t0 = time.monotonic()
                 if shared is None or (a.rebuild_every and n_since_bg >= a.rebuild_every):
                     bg, dish, fps = ft.build_background(vp); shared = (bg, dish, fps); n_since_bg = 0
+                    if dish is not None:     # keep rt_plot's true-dish-center sidecar current
+                        update_dish_sidecar(os.path.join(a.out_dir, f"{sid}_dish.json"),
+                                            dish, a.mm_per_px)
                 else:
                     bg, dish, fps = shared
                 if bg is None:
@@ -336,15 +379,30 @@ def main():
                         continue          # leave pending; do NOT mark processed
                     print(f"  {name}: no dish/bg after {MAX_BG_RETRIES} tries -> skip")
                     processed.add(name); open(proc_path, "a").write(name + "\n"); continue
-                if beh is not None:
-                    # UNIFIED single YOLO pass -> location recs + behavior in one go
-                    recs, rbres = beh["rb"].track_and_behavior(
-                        vp, model, bg, dish, fps, beh["art"], a.mm_per_px,
-                        a.conf, a.imgsz, a.device, a.stride)
-                else:
-                    recs, _ = track_location(vp, model, bg, dish, fps, a.mm_per_px,
-                                             a.conf, a.imgsz, a.device, a.stride)
-                    rbres = None
+                try:
+                    if beh is not None:
+                        # UNIFIED single YOLO pass -> location recs + behavior in one go
+                        recs, rbres = beh["rb"].track_and_behavior(
+                            vp, model, bg, dish, fps, beh["art"], a.mm_per_px,
+                            a.conf, a.imgsz, a.device, a.stride)
+                    else:
+                        recs, _ = track_location(vp, model, bg, dish, fps, a.mm_per_px,
+                                                 a.conf, a.imgsz, a.device, a.stride)
+                        rbres = None
+                except Exception as e:
+                    # A clip that crashes decode/tracking (corrupt-but-nonzero, bad
+                    # codec, partial GOP) must NOT crash the watcher -- that exits
+                    # nonzero, launchd restarts, hits the SAME clip, and crash-loops
+                    # forever. Quarantine it and move on, same as a truncated clip.
+                    print(f"  {name}: track failed ({type(e).__name__}: {e}) -> quarantined")
+                    processed.add(name); open(proc_path, "a").write(name + "\n")
+                    try:
+                        qdir = os.path.join(a.watch_dir, "_truncated")
+                        os.makedirs(qdir, exist_ok=True)
+                        os.rename(vp, os.path.join(qdir, name))
+                    except OSError:
+                        pass
+                    continue
                 for (nf, ts, xmm, ymm, spd, cf, state) in recs:
                     w.writerow([name, nf, f"{ts:.3f}", f"{xmm:.3f}", f"{ymm:.3f}",
                                 f"{spd:.3f}", f"{cf:.3f}", state])
