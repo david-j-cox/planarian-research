@@ -1,0 +1,377 @@
+# Session handoff — worm localizer (M5)
+
+Resume point for the next session. Everything below is on disk; data/labels/
+weights are gitignored (live under `realtime_runs/`, `live_capture/`, and
+`scripts_notebooks/runs/`).
+
+## ====== BATCH CATCH-UP ON THIS MAC (2026-06-26 PM, FINAL) -- run `catch_up.sh` ======
+ARCHITECTURE (after trying then RETIRING a cloud box): the recording Mac uploads
+1-min clips to the endicott Drive continuously (68 TB free -> clips buffer
+indefinitely). THIS Mac processes them in BATCH on MPS when it comes online:
+**`bash catch_up.sh`** pulls accumulated clips (rclone --min-age 2m), processes
+location+behavior at imgsz 1024 / stride 2 (~5s/clip on MPS, full quality), renders
+the 3h-capped plot, and force-pushes it to the GitHub Pages site -- then deletes
+processed clips from Drive. A day's backlog clears in ~2h. Not real-time, but the
+Twitch stream is always live and the data is for hours/days-scale analysis.
+
+WHY NOT cloud: a Hetzner CX33 (4-core CPU) could only manage stride-4 ~50s/clip and
+kept breaking even with no margin; MPS here is ~10x faster AND higher quality for $0.
+The cloud box was decommissioned; cloud/DEPLOY.md kept for reference if revisited.
+
+KEY CODE THIS PM: rt_behavior.track_and_behavior (unified single YOLO pass = location
++ behavior in one inference); rt_plot ethogram render fix + 3h cap; rt_watch gains
+RT_LOCAL_FS bypass (skip Drive File-Provider gates for local clips) + auto-quarantine
+of truncated clips (<min_frames) so --once can't jam. FOLLOW-UP: retrain behavior on
+stride-2 signals (served stride != trained all-frames). The section below is the
+now-retired in-session on-Mac live setup (kept for reference).
+
+## ====== (SUPERSEDED) CURRENT STATE (2026-06-26 AM) -- ON-MAC LIVE SYSTEM ======
+A clean multi-hour capture ("worm_run_01") has been running since 2026-06-25
+18:43 and is STILL RECORDING (a ~24h run). Rig (separate Mac) records 1-min
+3360x2100 @10fps .mkv clips, uploads to Google Drive (dcox@endicott.edu), AND
+streams to Twitch (channel `behavioraldatasciencelab`). Everything below runs on
+THIS Mac, as background jobs INSIDE the Claude session (user keeps it open) --
+NOT launchd (see "WHY NOT launchd"). All code UNCOMMITTED on `dev`.
+
+WHAT'S LIVE (3 background loops + supervisor):
+  - scripts_notebooks/run_watch_supervised.sh -> rt_watch.py (restart-on-crash).
+    Args: --stable_s 6 --min_frames 560 --delete_after --keep_total 60
+          --behavior_model ../realtime_runs/behavior_clf.joblib
+          --label_queue ../realtime_runs/label_queue --keep_per_day 150
+    Per clip: location+movement track  +  LIVE BEHAVIOR (rt_behavior.clip_behavior).
+    ~33s/clip (location ~14s + behavior ~18s), under the 60s budget on MPS.
+  - rt_plot.py --session worm_run_01 --loop 60  -> realtime_runs/worm_run_01_live.png
+    7 panels: trajectory, occupancy, position(t), speed(t, log), distance-from-
+    center, turning rate, and an ETHOGRAM (behavior over time). 6 mm/s artifact
+    cutoff (planarian gliding tops ~5 mm/s); trajectory breaks only on >15 mm/s
+    teleports; all metric panels dish-centered.
+  - publish_live.sh -> force-pushes live.png to GitHub Pages every ~6 min.
+
+PUBLIC WEBSITE: https://david-j-cox.github.io/planarian-live/  (public repo
+david-j-cox/planarian-live, separate from this research repo). index.html embeds
+the Twitch player (desktop) / a tap-to-watch live-preview card (mobile Safari
+can't play the inline embed) + the live 7-panel plot (auto-refresh 60s). Worm
+favicon. Publish loop runs in the Claude session.
+
+OUTPUTS (realtime_runs/):
+  worm_run_01_tracks.csv      location+movement (rolling; rows are append-order,
+                              NOT chronological -- sort by clip time; clean_tracks.py
+                              writes a sorted/deduped/overlap-trimmed copy).
+  worm_run_01_behavior.csv    per-second behavior state + confidence (ethogram).
+  worm_run_01_processed.txt   resume ledger.
+  worm_run_01_keep_manifest.csv  the 60 balanced training clips (done).
+  keep_clips/                 the 60 labeled training clips (~2.6GB).
+  label_queue/                NEW uncertain/rare clips for labeling (active
+                              learning, <=150/day); _kept.csv logs why each kept.
+  behavior_clf.joblib         PRODUCTION behavior model (see below).
+
+BEHAVIOR MODEL (v1, trained THIS session on clean data, PROMOTED to prod):
+  5 classes: contracted, gliding, resting, turning, wig_wag. RandomForest,
+  LOO-CV macro-F1 0.84 (gliding 0.92, contracted 0.89, resting 0.86, turning
+  0.86, wig_wag 0.65). IMPORTANT: what the labeler first called "scrunching" was
+  renamed "contracted" -- the worm RESTS in a contracted pear/oval posture; it is
+  NOT the scrunching escape gait (absent in undisturbed footage; needs a future
+  stimulus session). peristalsis(1)/reversing(0) too few -> deferred. Old
+  corrupt-7MP model backed up: behavior_clf_OLD_corrupt7mp.joblib.bak.
+  Pipeline: yolo_to_signals (morphology .npz) -> behavior_features ->
+  behavior_label_tool sample/label (blind, windowed) -> behavior_classifier.
+
+TO LABEL MORE (the user will ask Claude to launch this): the day's uncertain
+clips collect in label_queue/. To make a blind batch and label:
+  cd scripts_notebooks
+  ../venv/bin/python behavior_label_tool.py sample --signals <gen first> ...
+  # simplest: re-run yolo_to_signals on label_queue/*.mkv -> a signals.npz, then
+  #   behavior_label_tool.py sample  (or `active` with --model behavior_clf.joblib),
+  #   then LAUNCH THE GUI via AppleScript so it has display+keyboard:
+  #   osascript -e 'tell app "Terminal" to do script "cd <scripts> && ../venv/bin/python behavior_label_tool.py label --manifest_dir <dir> --clips_dir ../realtime_runs/label_queue"'
+  # then merge_label_sets + behavior_classifier to retrain; re-promote the joblib.
+  Keys shown on-screen: 1-7 behaviors, n/space next, b back, x no-worm, f frozen, q quit.
+
+CLOUD MIGRATION (planned, not built): user must turn off this Mac eventually.
+  Target: Oracle Cloud Always-Free (Ampere ARM, 2 OCPU/12GB, $0) for the LOCATION
+  pipeline, tuned imgsz 640/stride 3 (benched ~14.6s/clip @2 threads -> ~30-45s
+  on the free box). Reads Drive via rclone (NOT File Provider; share clips folder
+  to a personal Gmail if endicott Workspace blocks OAuth). systemd services.
+  KEY: behavior ~doubles compute and will NOT fit the free box -> behavior is the
+  proven trigger for a PAID box (~$16/mo Hetzner CAX31 ARM, EU). CPU-only (no GPU).
+  See docs/compute_node_handoff.md.
+
+DRIVE-SYNC HARDENING in rt_watch.py (all verified live): materialized() gates on
+on-disk block count so we never open() an online-only/partial Drive file (open
+hangs the whole loop -- __open_nocancel); prefetch() (detached `cat`) pulls
+online-only clips; clip_ready() requires near-full stable frame count (byte-size
+"stable" lies on Drive); retry-not-discard on transient build_background failure;
+--delete_after only deletes FULL clips. 7MP @10fps decodes clean (10fps fixed the
+old high-fps frozen-frame corruption; 1080p not needed).
+
+WHY NOT launchd: a bare launchd agent CANNOT read the Drive File Provider folder
+(open() needs Full Disk Access, which a GUI/terminal session inherits but launchd
+does not -> hangs). To use launchd later, grant FDA to the python binary and
+recreate the agent. On Linux (cloud) this is a non-issue (systemd + rclone).
+
+MONITORS (Claude-session bash/Monitor tasks): supervisor-log anomalies (SHORT
+clip, SUSTAINED low detection = 3+ clips <60%, errors, label-queue), ~7.5min
+processing-stall heartbeat. Detection 90-100% normally; sustained ~55% dips are
+the worm edge-following (radius ~91% to wall), benign.
+
+TO STOP: pkill -f run_watch_supervised; pkill -f rt_watch.py; pkill -f rt_plot.py; pkill -f publish_live.sh
+TO RESUME after stop: cd scripts_notebooks; zsh run_watch_supervised.sh &  (then
+relaunch rt_plot loop + publish_live.sh). All state resumes from the ledgers.
+SAVED ARTICLES: articles/Nociception and Planarians.pdf, Escape Response and
+Planarians.pdf (open-access; back the ~5 mm/s gliding ceiling / escape gait).
+## =========================================================
+
+## ====== RESUME HERE (2026-06-24 EOD) ======
+All code committed; working tree clean (only pre-existing untracked
+docs/Conference_Abstract + yolo11n-pose.pt). No processes running.
+
+THE BIG PICTURE: tooling is solid; the existing white-7MP footage is CORRUPT at
+capture (frozen frame -> worm teleports; OBS dropped frames at 7MP). So the model
+is stuck ~0.45-0.56 and labeling more of THIS footage won't help. Two parallel
+tracks unblock everything:
+
+TRACK 1 — CLEAN DATA (user action): user is capturing a clean day of data,
+recording BELOW 7MP (720-1080p) so OBS stops dropping frames; confirm zero
+dropped frames. This is the foundational fix. When clean clips exist:
+  - retrain the behavior model on them (the pipeline -- track -> sample ->
+    label (with f/x triage, slow-mo) -> merge_label_sets -> behavior_classifier
+    -- is solid and ready). That makes behavior output trustworthy.
+
+TRACK 2 — REAL-TIME PIPELINE (built + verified this session, ready to deploy):
+  - `rt_watch.py` watches the Drive clips folder and emits a rolling
+    location+movement CSV. 5.3x real-time headroom (11.4s/clip), memory leak
+    fixed (reclaim + periodic re-exec). Verified end-to-end.
+  - LIVE CMD: python -u rt_watch.py --watch_dir "$DRIVE/planarian_clips"
+             --session_id worm_run_01
+  - REMAINING: wrap in a launchd supervisor (auto-restart on crash/reboot);
+    behavior layer waits on Track 1's clean-data retrain (location/movement is
+    production-ready now).
+
+NEXT SESSION, likely first moves: (a) point rt_watch at the live Drive folder for
+the location readout, (b) once a clean day is captured, run the label->retrain
+loop on it. See the dated sections below for full detail on each piece.
+## ==========================================
+
+## Where we landed (updated 2026-06-22)
+Goal: a near-perfect worm localizer on the **go-to rig = latest white 7MP**
+(2026-06-02 15:54–16:08 series, 3360x2100, warm-white; 15 clips local in
+`live_capture/`). Scored against the 600 human GT frames in
+`realtime_runs/label_white7mp/` (400 'active', 200 held-out 'eval').
+
+**A rig-trained YOLO is now the primary localizer and clearly wins.** Progress
+chain on the SAME 200 held-out GT frames (box-center error, mm):
+
+| Approach | Median | p90 | Max | Coverage |
+|---|---|---|---|---|
+| S3-YOLO, per-frame (old) | 23.5 | 62 | — | 76.5% |
+| bg-sub + dish (fusion_tracker) | 0.978 | 3.79 | 50.9 | 100% |
+| **white-7MP YOLO + temporal (yolo_tracker)** | **0.678** | **1.57** | **3.66** | 198/200 |
+
+Settled this session:
+- **The fusion eval's "kills" were a bug, not the machine.** `pca_axis` used
+  `np.linalg.svd` with `full_matrices=True` → an M×M matrix on noisy contours
+  (44 GB, multi-minute hangs). Fixed to a 2×2 covariance eigenvector. The eval
+  is now resumable (`fusion_eval_checkpoint.json`).
+- fusion (Hampel) tracker: median 0.978 / p90 3.79, 100% localized — the v1
+  greedy-tracker p90 regression (31 mm) is gone. But a tail remained (max
+  50.9 mm) from wrong-blob frames where the worm was momentarily invisible to
+  bg-sub (noisy/illumination frames with 200–900 candidate blobs).
+- **Segmented (time-windowed) backgrounds were tried and REVERTED** — net
+  regression (median 0.978→1.35, p90 3.79→6.31): short per-segment windows let
+  a dwelling worm contaminate its own background. Do not revisit without
+  fixing that.
+- The S3-trained YOLO cannot localize on white-7MP even with a crop prior
+  (conf 0.15–0.42, errors 13–58 mm) → it was a domain-shift problem, fixed by
+  fine-tuning on the rig.
+- **Fine-tuning the S3 nano on 360 white-7MP frames** (build_white7mp_dataset
+  → train_yolo --name worm_white7mp_n): median 0.672 mm per-frame, **no
+  50 mm tail** (max 3.66), 100% within 5 mm. ~35× better than S3.
+
+## Current best tracker: `scripts_notebooks/yolo_tracker.py`
+- Position from `runs/pose/worm_white7mp_n/weights/best.pt` (dish gate ×1.10).
+- Morphology (head/tail/body-len via PCA) from the bg-sub foreground INSIDE the
+  YOLO box (`box_axis`, box expanded 0.35×), anchored THROUGH the YOLO
+  position. This excludes the dish rim (which used to make the axis arc across
+  the dish on edge worms) and caps body length to the box. Position never
+  depends on bg-sub.
+- Shared `fusion_tracker.hampel_clean` temporal pass (spike reject + interp/
+  hold + smooth) fills no-detection frames and jitter.
+- `python yolo_tracker.py eval` (windowed, ~20 min) | `... track --video ... --overlay`
+  (overlay is downscaled 0.4× for smooth playback; --overlay_scale to change).
+
+## Validated end-to-end (2026-06-22)
+Full-video track on 2026-06-02_16-00-37 (1890 frames): 100% detection, 0
+interp; body-length tight [5.06, 9.03]mm (median 7.87), present every frame;
+green head/tail axis stays on the worm at the dish edge. Overlay in
+`realtime_runs/yolo_out/`. KNOWN open item: ~1.2% of frames show 2–6mm
+single-frame position jumps (mostly box-center wobble as the worm bends; the
+box center is a noisier position proxy than a blob centroid). Hampel didn't
+catch them (sub-threshold / not isolated). Revisit by gating on physical worm
+speed if it matters downstream. NOTE: these jumps no longer corrupt head/tail
+identity (orientation is now centroid-relative, jump-invariant) -- they only
+wobble the position dot.
+
+## Behavior-model integration — DONE (2026-06-22), unvalidated on this rig
+- `yolo_to_signals.py` (new) runs yolo_tracker over clips and writes the
+  `<session>_signals.npz` schema that `behavior_features` / `behavior_rules` /
+  the trained classifier consume. The behavior model now runs unchanged on the
+  YOLO-primary localizer. End-to-end verified on 2026-06-02_16-00-37 (1890
+  frames, 0 lost): features compute, rule + S3-trained classifiers both run.
+- Morphology upgraded from a straight PCA axis to a CURVED head->tail midline:
+  `box_morphology` skeletonizes the box-constrained worm contour via
+  `open_dish_tracker.extract_midline` (straight-axis PCA kept only as fallback).
+  This decouples head oscillation from body heading -- `head_osc_deg` 12.4->28.9,
+  `head_reversals` p90 0->3 (was flat zero). The rule classifier then surfaces
+  all 7 behaviors (wig_wag 1.1%->26.4%, reversing 0%->7.5%) vs only 5 before.
+- Head/tail ORIENTATION made robust (`orient_midlines`): centroid-relative EMA
+  chaining for stability + a physical-speed-gated global velocity vote to name
+  the head (planaria lead with the head when gliding). The two 180-deg head
+  flips first seen in the overlay were NOT body folds -- they sat on box-center
+  position jumps (~30 mm/s, worm max ~7), where an absolute-position reference
+  degenerates. Centroid-relative matching is jump-invariant; residual head
+  reversals 2->0 on the validated clip. Confirmed visually 2026-06-22.
+
+### Behavior model VALIDATED + retrained on white-7MP (2026-06-23)
+- Built a blind label set: tracked all 15 go-to clips into one
+  `realtime_runs/white7mp_signals.npz` (27441 frames, 100% curved midline), then
+  `behavior_label_tool.py sample --n 130 --window_s 3` -> 126 windows stratified
+  18/behavior, in `realtime_runs/white7mp_labels_blind/` (manifest + hidden rule
+  preds tracked; `human_labels.csv` tracked).
+- Labeled all 126 blind. Distribution: gliding 87, wig_wag 27, turning 23,
+  scrunching 5; ZERO resting/peristalsis/reversing (the rule's rare predictions
+  were systematically wrong on this rig).
+- Rule classifier vs blind labels (`behavior_accuracy.py`): 21% / macro-F1
+  0.208 (low, expected -- sample is balanced by rule pred, adversarial to it).
+- Retrained RandomForest (`behavior_classifier.py`, LOO-CV): macro-F1 0.681 /
+  micro-F1 0.811. gliding F1 0.94, wig_wag 0.75, turning 0.43, scrunch 0.60.
+  3.3x the rule; first behavior model validated ON this rig (not borrowed S3).
+  Saved `realtime_runs/behavior_clf_white7mp.joblib` (gitignored, regenerable).
+- NOTE during labeling: the label GUI playback was choppy (wall-clock frame
+  indexing skipped frames under load + near-native crop render). Fixed in
+  `behavior_label_tool.py` (paced one-frame-per-period + tiny persistent display
+  buffer; new --disp_w). Source clips are clean 30fps (verified all 15).
+
+### Improving the behavior model (2026-06-23): 3 levers worked
+Finding: at n=126 with scrunch=5/turning=22, macro-F1 bounces +/-0.05 from
+feature/model variants -- the binding constraint is per-class DATA + behavior
+DEFINITIONS, not the model (RF is right at this size). Levers pursued:
+1. MOTION FEATURES (`ang_vel_p90_deg_s`, `path_curv_deg_mm`, `body_curv_deg`,
+   jitter-robust) -- NEUTRAL on current data (RF 0.681->0.669). The raw
+   (non-robust) variant scored 0.718 but that was jitter overfit (won't
+   generalize); rejected. Kept robust versions for when classes grow.
+2. ETHOGRAM (`docs/behavior_ethogram.md`) -- measurable per-gait definitions,
+   explicit gliding-vs-turning boundary (the main label-noise source). Use it
+   for the next labeling round; consider a 2nd-labeler inter-rater check.
+3. ACTIVE LEARNING (`behavior_label_tool.py active`) -- DONE round 2: labeled
+   the 95-window batch, merged to 221 via `merge_label_sets.py`
+   (`white7mp_labels_combined`), retrained. Active learning enriched the hard
+   classes (turning 23->48, scrunch 5->15). Combined RF LOO-CV (4 classes,
+   min_support=5): macro-F1 0.637; TURNING 0.43->0.53 (the targeted gain),
+   gliding 0.90, wig_wag 0.72, scrunch 0.40. Macro looks flat vs the first
+   batch's 0.681 only because the combined set is harder/representative (active
+   learning adds boundary cases) -- 0.637 is the more trustworthy estimate.
+   The label->train->active->label loop is reproducible; run it again for more
+   turning/scrunch. Tool now has an 'x' no-worm skip + resume-at-first-unlabeled.
+
+### Real-time pipeline (built + dry-run-verified 2026-06-24)
+Goal: clips push to Drive 1/min, analyze continuously for a week. Budget: <60s/clip.
+- `rt_dryrun.py` — lean LOCATION+MOVEMENT tracker (YOLO box -> worm blob centroid
+  -> Hampel position+speed; behavior deferred to clean-data retrain) + dry-run/
+  soak harness. Findings (M-series MPS):
+  * Already real-time: baseline ~30s/clip (2x under budget). reuse_bg (fixed rig,
+    build once) + stride2 (YOLO every other frame, ~15fps) -> 11.4s/clip = 5.3x
+    headroom, 0/230 over budget.
+  * imgsz 1024->640 gives NO speedup (YOLO is per-call-overhead-bound, not
+    resolution-bound) -- keep 1024 for accuracy.
+- MEMORY LEAK found by 230-clip soak: +3.4 MB/clip (~36GB/7-day -> crash). NOT
+  YOLO (predict flat). Fix: per-clip reclaim() (gc + mps.empty_cache) halves it;
+  periodic RE-EXEC caps it (OS frees all on exit, resumes via processed-list).
+- `rt_watch.py` — continuous Drive-folder watcher. File-stability gate, resumable
+  (<sid>_processed.txt, CSV appended), reuse_bg, backlog alarm, --restart_every
+  (re-exec, default 200), --delete_after, line-buffered logs. Verified: process +
+  resume + re-exec all work. LIVE CMD:
+    python -u rt_watch.py --watch_dir "$DRIVE/planarian_clips" --session_id worm_run_01
+- STILL TODO for live: supervisor (launchd auto-restart) around it; behavior layer
+  needs the clean-data retrain before behavior (vs just location) is trustworthy.
+
+### CAPTURE CORRUPTION is the root limiter (found 2026-06-24)
+The white-7MP video is corrupt at the CAPTURE level: still image, then the worm
+teleports across the dish (real motion lost). Files decode cleanly with regular
+33ms PTS -> NOT transfer corruption; it's OBS dropping/duplicating frames because
+the 7MP stream overloaded the machine. NOT fixable in post (motion frames don't
+exist). Position tracking of a slow worm partly survives; fine behavior
+(contractions, wig-wag timing) does not.
+- NOT auto-detectable: the user-flagged frozen windows have dup-fraction 0.00
+  (FEWER exact dups than clean windows), so it is not frame-duplication and no
+  metric I tried separates it. Manual triage is the only reliable flag.
+- Labeler now has an 'f' = FROZEN key (dropped from training/accuracy via SKIP).
+  Clean batch triage: 32/100 frozen, ALL from the 15:0x pool-expansion clips;
+  the go-to 15:54-16:08 clips got zero frozen marks (may be cleaner).
+- Model is stuck ~0.45 (5-class) / ~0.56 (4-class) across rounds; more labeling
+  on this footage will not fix it.
+- REAL FIX = re-capture below 7MP (720-1080p) so OBS stops dropping frames,
+  confirm zero dropped frames, then rerun the (now solid) label pipeline.
+- The pipeline IS solid now: blob-centroid position (9x less jitter), jitter
+  gate, dedup, ping-pong playback, slow-mo (-/= keys), f/x triage, active
+  learning. Ready for clean video.
+
+### Corpus scope (checked 2026-06-23)
+Drive `My Drive/PlanarianVideos/` has ~968 videos across 4 dates, but only
+2026-06-02 is the CURRENT white rig (OpenDishWork/additional_videos = deprecated
+old setups, per user -- do NOT use). Of 39 white-rig clips: 14:31-14:49 (16
+clips) are EMPTY pre-worm setup footage (0-10% detection -- don't re-pull);
+14:58-16:08 (23 clips) hold a worm. Usable pool = `white7mp_signals_pool.npz`
+(23 clips, 40,134 detected frames). 16 empty clips sit in live_capture
+(gitignored), deletable.
+
+### Source videos contain PADDED DUPLICATE frames (found 2026-06-23)
+The 7MP capture can't sustain true 30fps, so OBS repeats frames to fill the
+timeline. Full-clip rate 1.7-3.3%, in runs up to 5-6 identical frames (~0.2s).
+Timestamps are evenly stamped (so the earlier "clean 30fps" check missed it --
+it only looked at POS_MSEC spacing, not identical content). The label GUI now
+drops exact-duplicate consecutive frames in playback. OPEN: yolo_to_signals does
+NOT dedup, so behavior features have a small bias toward lower speed / more
+"resting" (~2-3% of frames); de-duping there would shift native_frame indices
+and break label-window matching, so left as a follow-up. Effective unique rate
+~29 fps.
+
+### Still open
+- scrunch/peristalsis/reversing are scarce in this baseline session -- they are
+  EVOKED gaits. NOT obtainable from existing footage (all 2026-06-02 baseline;
+  old rigs unusable). Biggest remaining lever = record evoked behavior on the
+  WHITE rig (drug/stimulus) and label that. Data-collection decision (lab).
+- Active batch 3 ready to label: `realtime_runs/white7mp_labels_active2` (93
+  windows). Label -> merge_label_sets (blind+active+active2) -> retrain.
+- A few clips show 1-8 residual head-flips (position-jump frames); only affects
+  features on those windows. Tighten position jitter (speed gate) if needed.
+- Apply `behavior_clf_white7mp.joblib` across full clips for habituation/
+  pharmacology readouts (`habituation_analysis.py`, `infer_video.py`).
+- Label-tool playback was choppy mid-session; fixed (paced playback; --disp_w).
+
+## Then (priority order)
+1. **Cross-rig generalization**: the white-7MP model is rig-specific (eval
+   frames are other frames from the same 15 videos). For blue/amber rigs, train
+   on bg-subtracted / dish-cropped (lighting-invariant) inputs, or add labels
+   from other rigs. This is the path to ONE model.
+2. Position jitter: optional Hampel/speed-gate tightening for the ~1.2% jump
+   frames noted above.
+3. Speed: if real-time needed, export to CoreML/ONNX or lower imgsz; current
+   ~3 fps is fine for offline analysis only.
+4. Confirm `mm_per_px` (used S3's 0.02657) for the 16:xx rig geometry. Pixel
+   metrics are unaffected; only mm scaling.
+
+## Files this session (scripts_notebooks/, tracked)
+- `fusion_tracker.py` — bg-sub fusion tracker; pca_axis SVD fix; resumable
+  eval; `hampel_clean` extracted for reuse.
+- `build_white7mp_dataset.py` — YOLO pose dataset from label_white7mp (eval
+  pool held out).
+- `eval_white7mp_localizer.py` — per-frame YOLO box-center mm eval.
+- `yolo_tracker.py` — YOLO-primary tracker (track/eval). **Current best.**
+
+## Artifacts (gitignored, on disk)
+- `realtime_runs/label_white7mp/` — manifest + labels.json (600 GT) + cached
+  frames. THE precious artifact.
+- `scripts_notebooks/runs/pose/worm_white7mp_n/weights/best.pt` — rig localizer.
+- `scripts_notebooks/runs/pose/worm_s3_n/weights/best.pt` — S3 nano (source).
+- `realtime_runs/yolo_white7mp/` — fine-tune dataset (360 train / 40 val).
+- `live_capture/` — 8 S3 + 15 white-7MP go-to videos (local).

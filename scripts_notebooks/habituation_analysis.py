@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import csv
+import json
 import os
 import glob
 import re
@@ -23,10 +24,38 @@ import matplotlib.pyplot as plt
 from collections import OrderedDict
 
 
+# Only analyze files whose worm name is in this set (excludes yuja_, etc.)
+ANALYZE_WORMS = {"Bubba", "Champ"}
+
+# Implausibly fast frames are almost always tracker blob-jumps. Real planarian
+# glide speed tops out near 3 mm/s; >15 mm/s is unambiguous tracker error.
+TRACKER_ERROR_SPEED_MM_S = 15.0
+ANALYZABLE_SOURCES = {
+    "tracked", "imputed_short", "imputed_bisect",
+    "imputed_anchored", "human_traced",
+}
+
+
+def _load_truncations(repo_root):
+    """Per-session truncate_at_s overrides from session_truncations.json."""
+    path = os.path.join(repo_root, "session_truncations.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return {k: v for k, v in json.load(f).items() if not k.startswith("_")}
+
+
 # ── Data loading ─────────────────────────────────────────────────────
 
-def load_session(csv_path):
-    """Load a tracking CSV and return structured data as a dict of arrays."""
+def load_session(csv_path, truncate_at_s=None):
+    """Load a tracking CSV and return structured data as a dict of arrays.
+
+    If truncate_at_s is given, rows with time_s >= cutoff are dropped at load.
+
+    Tracker errors are re-tagged in-memory: rows currently 'tracked' with
+    speed_mm_s > TRACKER_ERROR_SPEED_MM_S become source='tracker_error' and
+    are dropped from the analyzable mask.
+    """
     with open(csv_path) as f:
         lines = f.readlines()
 
@@ -41,21 +70,37 @@ def load_session(csv_path):
     y_mm = []
     speed_mm_s = []
     detected = []
+    source = []
+    analyzable = []
+    n_error = 0
 
     for r in rows:
         t = float(r["time_s"])
+        if truncate_at_s is not None and t >= truncate_at_s:
+            continue
         has_det = bool(r["centroid_x_mm"].strip())
+        src = (r.get("source") or "").strip()
         time_s.append(t)
         detected.append(has_det)
         if has_det:
             x_mm.append(float(r["centroid_x_mm"]))
             y_mm.append(float(r["centroid_y_mm"]))
             sp = r["speed_mm_s"].strip()
-            speed_mm_s.append(float(sp) if sp else 0.0)
+            sp_val = float(sp) if sp else 0.0
+            speed_mm_s.append(sp_val)
+            if src == "tracked" and sp_val > TRACKER_ERROR_SPEED_MM_S:
+                src = "tracker_error"
+                n_error += 1
         else:
             x_mm.append(np.nan)
             y_mm.append(np.nan)
             speed_mm_s.append(np.nan)
+        source.append(src)
+        analyzable.append(src in ANALYZABLE_SOURCES)
+
+    if n_error:
+        print(f"  [tracker-error] {os.path.basename(csv_path)}: re-tagged "
+              f"{n_error} rows with speed > {TRACKER_ERROR_SPEED_MM_S} mm/s")
 
     return {
         "time_s": np.array(time_s),
@@ -63,14 +108,22 @@ def load_session(csv_path):
         "y_mm": np.array(y_mm),
         "speed_mm_s": np.array(speed_mm_s),
         "detected": np.array(detected),
+        "source": np.array(source),
+        "analyzable": np.array(analyzable),
     }
 
 
 def compute_step_distances(data):
-    """Compute frame-to-frame distances in mm (NaN where detection gaps)."""
+    """Frame-to-frame distances in mm. Zeros out steps where either endpoint
+    is non-analyzable (tracker error, LOST, etc.) so tracker glitches don't
+    inflate distance."""
     dx = np.diff(data["x_mm"])
     dy = np.diff(data["y_mm"])
-    return np.sqrt(dx**2 + dy**2)
+    steps = np.sqrt(dx**2 + dy**2)
+    ana = data["analyzable"]
+    edge_ok = ana[:-1] & ana[1:]
+    steps = np.where(edge_ok, steps, np.nan)
+    return steps
 
 
 def rolling_mean(arr, window):
@@ -90,22 +143,23 @@ def rolling_mean(arr, window):
 # ── Analysis (a): Total distance per session ─────────────────────────
 
 def analyze_total_distance(sessions):
-    """Compute total distance traveled (mm) for each session."""
+    """Compute total distance traveled (mm) for each session.
+
+    Tracker-error and LOST rows are upstream-filtered in compute_step_distances
+    (their steps are NaN), so plain nansum is the right aggregator.
+    """
     results = OrderedDict()
     for name, data in sessions.items():
         steps = compute_step_distances(data)
-        # Filter out unreasonably large jumps (tracking errors)
-        # A planarian moves at most ~3 mm/s, at ~0.3s intervals → max ~1 mm/step
-        max_step = 2.0  # mm — generous threshold
-        valid_steps = steps[~np.isnan(steps)]
-        valid_steps = valid_steps[valid_steps <= max_step]
-        total_mm = np.sum(valid_steps)
+        total_mm = np.nansum(steps)
         det_rate = np.mean(data["detected"]) * 100
+        ana_rate = np.mean(data["analyzable"]) * 100
         duration_min = (data["time_s"][-1] - data["time_s"][0]) / 60.0
         results[name] = {
             "total_mm": total_mm,
             "total_cm": total_mm / 10,
             "detection_rate": det_rate,
+            "analyzable_rate": ana_rate,
             "duration_min": duration_min,
             "n_frames": len(data["time_s"]),
         }
@@ -147,6 +201,9 @@ def analyze_movement_timecourse(data, window_sec=300):
     ~0.36 mm/s of fake instantaneous speed that never drops to zero.
     Net displacement over 5 minutes correctly reads ~0 for a still worm.
 
+    Non-analyzable rows (tracker_error, LOST) get NaN x/y locally so a
+    blob-jump endpoint can't poison the window's displacement.
+
     Parameters
     ----------
     data : dict from load_session
@@ -159,8 +216,9 @@ def analyze_movement_timecourse(data, window_sec=300):
     """
     time_s = data["time_s"]
     speed = data["speed_mm_s"].copy()
-    x_mm = data["x_mm"]
-    y_mm = data["y_mm"]
+    ana = data["analyzable"]
+    x_mm = np.where(ana, data["x_mm"], np.nan)
+    y_mm = np.where(ana, data["y_mm"], np.nan)
 
     # Estimate frame interval
     dt = np.median(np.diff(time_s[~np.isnan(time_s)][:100]))
@@ -198,30 +256,30 @@ def analyze_movement_timecourse(data, window_sec=300):
 # ── Plotting ─────────────────────────────────────────────────────────
 
 def plot_total_distance(results, output_dir, worm_name):
-    """Bar chart of total distance per session for one worm."""
+    """Bar chart of total distance per session for one worm (APA grayscale)."""
     sessions = [k for k in results if k.startswith(worm_name)]
     if not sessions:
         return
 
     labels = [s.split("_")[1] for s in sessions]  # "0001", "0002", etc.
     distances = [results[s]["total_cm"] for s in sessions]
-    det_rates = [results[s]["detection_rate"] for s in sessions]
 
     fig, ax1 = plt.subplots(figsize=(8, 5))
 
-    bars = ax1.bar(labels, distances, color="#4C72B0", alpha=0.85, label="Distance (cm)")
-    ax1.set_xlabel("Session", fontsize=12)
-    ax1.set_ylabel("Total Distance Traveled (cm)", fontsize=12, color="#4C72B0")
-    ax1.tick_params(axis="y", labelcolor="#4C72B0")
+    # Bubba = solid black, Champ = white with diagonal hatching.
+    if worm_name == "Champ":
+        ax1.bar(labels, distances, facecolor="white", hatch="///",
+                edgecolor="black", linewidth=1.0)
+    else:
+        ax1.bar(labels, distances, facecolor="black",
+                edgecolor="black", linewidth=1.0)
 
-    # Annotate bars with detection rate
-    for bar, rate in zip(bars, det_rates):
-        ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
-                 f"{rate:.0f}%", ha="center", va="bottom", fontsize=9, color="gray")
-
-    ax1.set_title(f"{worm_name} — Total Distance per Session\n(% = detection rate)",
-                  fontsize=13, fontweight="bold")
+    ax1.set_xlabel("Session Number", fontsize=24, labelpad=12)
+    ax1.set_ylabel("Total Distance\nTraveled (cm)", fontsize=24, labelpad=12)
+    ax1.tick_params(labelsize=14)
     ax1.set_ylim(bottom=0)
+    ax1.spines["top"].set_visible(False)
+    ax1.spines["right"].set_visible(False)
 
     plt.tight_layout()
     path = os.path.join(output_dir, f"{worm_name}_total_distance.png")
@@ -231,7 +289,7 @@ def plot_total_distance(results, output_dir, worm_name):
 
 
 def plot_speed_timecourse(sessions_data, timecourses, output_dir, worm_name):
-    """Speed over time for all sessions of one worm, stacked."""
+    """Speed over time for all sessions of one worm, stacked (APA grayscale)."""
     worm_sessions = [k for k in sessions_data if k.startswith(worm_name)]
     if not worm_sessions:
         return
@@ -241,37 +299,35 @@ def plot_speed_timecourse(sessions_data, timecourses, output_dir, worm_name):
     if n == 1:
         axes = [axes]
 
-    colors = plt.cm.viridis(np.linspace(0.2, 0.8, n))
+    # Light-to-dark gray gradient across sessions.
+    grays = [str(g) for g in np.linspace(0.65, 0.0, n)]
 
     for i, (sess_name, ax) in enumerate(zip(worm_sessions, axes)):
         tc = timecourses[sess_name]
         label = sess_name.split("_")[1]
 
-        # Plot raw speed as faint dots
+        # Raw speed as faint dots
         valid = ~np.isnan(tc["raw_speed"])
         ax.scatter(tc["time_min"][valid], tc["raw_speed"][valid],
-                   s=0.3, alpha=0.15, color="gray", rasterized=True)
+                   s=0.3, alpha=0.15, color="0.7", rasterized=True)
 
-        # Plot smoothed speed as line
+        # Smoothed speed as line
         ax.plot(tc["time_min"], tc["smoothed_speed"],
-                color=colors[i], linewidth=1.5, label=f"Session {label}")
+                color=grays[i], linewidth=1.5, label=f"Session {label}")
 
-        # Mark cessation point
+        # Mark cessation point with a thin black dashed line
         if tc["cessation_min"] is not None:
-            ax.axvline(tc["cessation_min"], color="red", linestyle="--",
-                       alpha=0.7, linewidth=1)
-            ax.text(tc["cessation_min"] + 0.5, ax.get_ylim()[1] * 0.85,
-                    f"Stops: {tc['cessation_min']:.1f} min",
-                    color="red", fontsize=9)
+            ax.axvline(tc["cessation_min"], color="black", linestyle="--",
+                       alpha=0.6, linewidth=1)
 
-        ax.set_ylabel("Speed\n(mm/s)", fontsize=10)
-        ax.legend(loc="upper right", fontsize=9)
+        ax.set_ylabel("Speed (mm/s)", fontsize=24, labelpad=12)
+        ax.tick_params(labelsize=14)
+        ax.legend(loc="upper right", fontsize=12, frameon=False)
         ax.set_ylim(bottom=0)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
 
-    axes[-1].set_xlabel("Time into session (minutes)", fontsize=12)
-    fig.suptitle(f"{worm_name} — Speed Over Time ({tc['window_sec']//60}-min rolling avg)\n"
-                 f"Red dashed = sustained cessation of movement",
-                 fontsize=13, fontweight="bold", y=1.02)
+    axes[-1].set_xlabel("Time (min)", fontsize=24, labelpad=12)
     plt.tight_layout()
     path = os.path.join(output_dir, f"{worm_name}_speed_timecourse.png")
     fig.savefig(path, dpi=150, bbox_inches="tight")
@@ -280,7 +336,8 @@ def plot_speed_timecourse(sessions_data, timecourses, output_dir, worm_name):
 
 
 def plot_habituation_summary(timecourses, output_dir):
-    """Cross-session comparison: cessation time across repeated exposures."""
+    """Cross-session comparison: cessation time across repeated exposures
+    (APA grayscale: Bubba=filled circle/solid line, Champ=hollow circle/dashed)."""
     worms = OrderedDict()
     for name, tc in timecourses.items():
         worm = name.split("_")[0]
@@ -293,42 +350,47 @@ def plot_habituation_summary(timecourses, output_dir):
 
     fig, ax = plt.subplots(figsize=(8, 5))
 
-    x_offset = 0
-    colors = {"Bubba": "#4C72B0", "Champ": "#DD8452"}
+    worm_marker_style = {
+        "Bubba": {"marker": "o", "facecolor": "black",
+                  "edgecolor": "black", "linestyle": "-"},
+        "Champ": {"marker": "o", "facecolor": "white",
+                  "edgecolor": "black", "linestyle": "--"},
+    }
 
     for worm, sess_list in worms.items():
+        style = worm_marker_style.get(worm,
+                                      {"marker": "s", "facecolor": "0.5",
+                                       "edgecolor": "black", "linestyle": ":"})
         xs = list(range(1, len(sess_list) + 1))
-        ys = []
-        for s in sess_list:
-            if s["cessation_min"] is not None:
-                ys.append(s["cessation_min"])
-            else:
-                ys.append(np.nan)  # never stopped
-
-        color = colors.get(worm, "gray")
+        ys = [s["cessation_min"] if s["cessation_min"] is not None else np.nan
+              for s in sess_list]
         valid = [i for i, y in enumerate(ys) if not np.isnan(y)]
         invalid = [i for i, y in enumerate(ys) if np.isnan(y)]
 
-        # Plot points
+        # Stopped points
         ax.scatter([xs[i] for i in valid], [ys[i] for i in valid],
-                   s=100, color=color, zorder=5, label=worm)
-        ax.scatter([xs[i] for i in invalid],
-                   [60 for _ in invalid],  # plot at top with different marker
-                   s=100, color=color, marker="^", alpha=0.5, zorder=5)
+                   s=100, facecolor=style["facecolor"],
+                   edgecolor=style["edgecolor"], linewidth=1.2,
+                   marker=style["marker"], zorder=5, label=worm)
+        # Never-stopped: triangle at top of plot
+        ax.scatter([xs[i] for i in invalid], [60 for _ in invalid],
+                   s=100, facecolor=style["facecolor"],
+                   edgecolor=style["edgecolor"], linewidth=1.2,
+                   marker="^", zorder=5)
 
-        # Connect with line
+        # Connecting line (black, linestyle distinguishes worm)
         ax.plot(xs, [y if not np.isnan(y) else 60 for y in ys],
-                color=color, alpha=0.5, linestyle="--")
+                color="black", alpha=0.6, linestyle=style["linestyle"],
+                linewidth=1.0)
 
-    ax.set_xlabel("Session Number (repeated exposure)", fontsize=12)
-    ax.set_ylabel("Time to Stop Moving (minutes)", fontsize=12)
-    ax.set_title("Habituation: Does the worm stop sooner with repeated exposure?",
-                 fontsize=13, fontweight="bold")
-    ax.legend(fontsize=11)
+    ax.set_xlabel("Session Number", fontsize=24, labelpad=12)
+    ax.set_ylabel("Time to First\nSustained Stop (min)", fontsize=24, labelpad=12)
     ax.set_xticks(range(1, 6))
+    ax.tick_params(labelsize=14)
     ax.set_ylim(bottom=0)
-    ax.text(0.98, 0.95, "▲ = never stopped during session",
-            transform=ax.transAxes, ha="right", va="top", fontsize=9, color="gray")
+    ax.legend(fontsize=14, frameon=False, loc="lower right")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
 
     plt.tight_layout()
     path = os.path.join(output_dir, "habituation_cessation_summary.png")
@@ -341,19 +403,20 @@ def plot_habituation_summary(timecourses, output_dir):
 
 def print_summary(dist_results, timecourses):
     """Print a text summary table."""
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 92)
     print("HABITUATION ANALYSIS SUMMARY")
-    print("=" * 80)
-    print(f"{'Session':<25s} {'Dist (cm)':>10s} {'Det Rate':>10s} "
+    print("=" * 92)
+    print(f"{'Session':<25s} {'Dist (cm)':>10s} {'Det':>7s} {'Analyz':>8s} "
           f"{'Duration':>10s} {'Stop Time':>12s}")
-    print("-" * 80)
+    print("-" * 92)
     for name in dist_results:
         d = dist_results[name]
         tc = timecourses.get(name)
         stop = f"{tc['cessation_min']:.1f} min" if tc and tc["cessation_min"] else "never"
-        print(f"{name:<25s} {d['total_cm']:>10.1f} {d['detection_rate']:>9.1f}% "
-              f"{d['duration_min']:>9.1f}m {stop:>12s}")
-    print("=" * 80)
+        print(f"{name:<25s} {d['total_cm']:>10.1f} {d['detection_rate']:>6.1f}% "
+              f"{d['analyzable_rate']:>7.1f}% {d['duration_min']:>9.1f}m "
+              f"{stop:>12s}")
+    print("=" * 92)
 
 
 # ── Main ─────────────────────────────────────────────────────────────
@@ -373,6 +436,14 @@ def main():
     output_dir = args.output_dir or args.data_dir
     os.makedirs(output_dir, exist_ok=True)
 
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    truncations = _load_truncations(repo_root)
+    if truncations:
+        print("Truncations from session_truncations.json:")
+        for k, v in truncations.items():
+            print(f"  {k}: truncate_at_s={v.get('truncate_at_s')} "
+                  f"({v.get('reason', '')})")
+
     # Find all track CSVs
     csv_files = sorted(glob.glob(os.path.join(args.data_dir, "*_tracks.csv")))
     if not csv_files:
@@ -381,14 +452,20 @@ def main():
 
     print(f"Found {len(csv_files)} session files\n")
 
-    # Load all sessions
+    # Load all sessions (filter to Bubba/Champ only).
     sessions = OrderedDict()
     for f in csv_files:
         name = os.path.basename(f).replace("_tracks.csv", "")
-        sessions[name] = load_session(f)
+        worm_match = re.match(r"(\w+?)_", name)
+        if not worm_match or worm_match.group(1) not in ANALYZE_WORMS:
+            continue
+        trunc = truncations.get(name, {}).get("truncate_at_s")
+        sessions[name] = load_session(f, truncate_at_s=trunc)
         det_pct = np.mean(sessions[name]["detected"]) * 100
+        ana_pct = np.mean(sessions[name]["analyzable"]) * 100
+        note = f" [truncated at {trunc:.1f}s]" if trunc else ""
         print(f"  Loaded {name}: {len(sessions[name]['time_s'])} frames, "
-              f"{det_pct:.1f}% detected")
+              f"{det_pct:.1f}% detected, {ana_pct:.1f}% analyzable{note}")
 
     # Analysis (a): Total distance
     print("\n── Analysis (a): Total Distance ──")
@@ -398,9 +475,9 @@ def main():
     print("\n── Analysis (b): Movement Timecourse ──")
     timecourses = OrderedDict()
     for name, data in sessions.items():
-        det_rate = np.mean(data["detected"]) * 100
-        if det_rate < args.min_detection_rate:
-            print(f"  {name}: SKIPPED (detection rate {det_rate:.1f}% < {args.min_detection_rate}%)")
+        ana_rate = np.mean(data["analyzable"]) * 100
+        if ana_rate < args.min_detection_rate:
+            print(f"  {name}: SKIPPED (analyzable rate {ana_rate:.1f}% < {args.min_detection_rate}%)")
             timecourses[name] = {
                 "time_min": (data["time_s"] - data["time_s"][0]) / 60.0,
                 "smoothed_speed": np.full_like(data["speed_mm_s"], np.nan),
